@@ -213,6 +213,8 @@ Cada entrada descreve sinais de detecção (como "query dentro de `for`"), falso
 
 **Execução não interativa no Windows.** Para acompanhar uma execução fora do terminal interativo, a skill foi chamada com `claude -p`. No Git Bash, o argumento `/refactor-arch` era convertido num caminho do Windows (`C:/Program Files/Git/refactor-arch`) e a skill não carregava. A solução foi definir `MSYS_NO_PATHCONV=1`. Essa variável, porém, foi herdada pelos comandos da própria skill e quebrou o `taskkill //PID` que liberava a porta, porque o `//` dependia justamente da conversão. A skill contornou o problema com outros comandos, e o `validation.md` passou a usar `MSYS_NO_PATHCONV=1 taskkill /PID`, que funciona com ou sem a variável no ambiente.
 
+**Servidor antigo respondendo na validação.** O projeto 3 roda com o modo debug ligado. No Windows, o reloader do Flask sobe processos filhos que herdam o socket da porta, mas o `netstat` mostra só o processo que a abriu. O `free_port` matava esse processo e os filhos continuavam respondendo, então a validação da versão refatorada poderia acabar testando o servidor original. A solução foi usar `taskkill /T`, que derruba a árvore inteira de processos.
+
 ---
 
 ## C) Resultados
@@ -225,6 +227,7 @@ A skill foi desenvolvida rodando no projeto 1: cada execução revelou um compor
 |---|---|---|---|---|---|---|
 | `code-smells-project` | 8 | 5 | 13 | 6 | 32 | 28 (4 pendentes) |
 | `ecommerce-api-legacy` | 5 | 6 | 11 | 7 | 29 | 25 (4 pendentes) |
+| `task-manager-api` | 4 | 5 | 10 | 7 | 26 | 22 (4 pendentes) |
 
 ### Projeto 1 — `code-smells-project`
 
@@ -482,3 +485,137 @@ Requisições feitas com `curl` contra a versão original e a refatorada:
 | `DELETE /api/users/9999` | 200, "Usuário deletado" | 404 |
 | Relatório depois de excluir um usuário | aluno `Unknown` | sem registros órfãos |
 | Header `X-Powered-By` | `Express` | ausente |
+
+### Projeto 3 — `task-manager-api`
+
+#### Execução
+
+A skill funcionou no projeto 3 na primeira execução, sem ajuste nas regras. Antes dela, o procedimento de liberar a porta recebeu mais uma correção, descrita em "Desafios encontrados".
+
+O projeto já tinha pastas de camadas (tipo B). Por isso, a skill manteve a estrutura na raiz e completou o que faltava: configuração, controllers, services com as regras, middlewares e um módulo próprio para as rotas de categorias. Nenhuma rota é administrativa pela regra 3, então a autenticação ficou como pendência. A exceção foi o papel do usuário: qualquer cliente podia se cadastrar como `admin`, e a skill tratou isso como dado de identidade corrompido. O campo `role` continua aceito, mas um papel diferente de `user` passou a exigir o token administrativo.
+
+Foi também o primeiro projeto com APIs deprecated no próprio código. A skill confirmou o `Query.get()` no fonte do SQLAlchemy instalado e trocou as duas APIs sem mudar o formato das datas nas respostas.
+
+#### Relatório de auditoria
+
+O relatório está em [`reports/audit-project-3.md`](reports/audit-project-3.md): 26 findings, com duas APIs deprecated no código (F18 e F19).
+
+| Seção A | Finding | Após a Fase 3 |
+|---|---|---|
+| P3-01 Segredos hardcoded | F03 | Parcial: `SECRET_KEY` vem do ambiente e as credenciais SMTP saíram junto com o serviço sem uso; as senhas de demonstração do seed continuam |
+| P3-02 Hash da senha exposto | F01, F02 | Resolvido: `password` saiu das respostas, e as senhas novas usam scrypt |
+| P3-03 Autenticação de fachada e escalada de privilégio | F05, F07 | Parcial: papel diferente de `user` exige token; o token do login continua sem verificação |
+| P3-04 Rotas concentram a lógica | F04, F08 | Resolvido |
+| P3-05 Debug com servidor exposto | F06 | Resolvido |
+| P3-06 Queries N+1 | F13 | Resolvido |
+| P3-07 Agregações ineficientes | F13 | Resolvido |
+| P3-08 Lógica do model reescrita nas rotas | F14 | Resolvido |
+| P3-09 `except:` genérico | F11 | Resolvido |
+| P3-10 Validações ausentes resultam em 500 | F10 | Resolvido |
+| P3-11 APIs deprecated | F18, F19 | Resolvido |
+| P3-12 Sem paginação | F17 | Resolvido: `limit` e `offset` opcionais, mantendo o array |
+| P3-13 Categorias no blueprint de relatórios | F16 | Resolvido |
+| P3-14 Tabelas criadas no import | F15 | Parcial: o `create_all` foi para a app factory, mas o `app.py` ainda cria a aplicação no import para manter o `from app import app, db` do seed; migrações ficam como recomendação |
+| P3-15 Dependências vulneráveis | F20 | Pendente: atualizar pacotes exige aprovação; sem `pip-audit`, as falhas não foram confirmadas |
+| P3-16 CORS aberto | F12 | Resolvido |
+| P3-17 `print()` no lugar de logging | F23 | Resolvido |
+| P3-18 Imports não usados | F21 | Resolvido |
+| P3-19 Código morto | F21 | Resolvido |
+| P3-20 Valores mágicos | F22 | Resolvido |
+| P3-21 Configuração fixa | F24 | Resolvido |
+| P3-22 Tags em texto separado por vírgula | F25 | Pendente: exige mudar o schema e os dados existentes |
+
+Além da seção A, a skill encontrou a task gravada com `user_id: 0`, uma referência a usuário inexistente (F10), os erros do framework (404, 405 e 415) saindo em HTML (F11), o seed que apaga todos os dados sem checar o ambiente (F15) e o `print` que registra dados pessoais (F23). O status sem `CHECK` no schema (F25) ficou como recomendação, junto com as tags.
+
+#### Estrutura antes e depois
+
+Antes, as pastas existiam, mas as rotas faziam tudo: consulta, validação, regras e serialização. O único serviço não era usado:
+
+```text
+task-manager-api/
+├── app.py
+├── database.py
+├── seed.py
+├── requirements.txt
+├── models/      task · user · category
+├── routes/      task_routes · user_routes · report_routes
+├── services/    notification_service
+└── utils/       helpers
+```
+
+Depois, `python seed.py` e `python app.py` continuam iguais. O `app.py` virou a composition root: `create_app(settings)` configura o Flask, o banco, o CORS e o tratamento de erros e registra um blueprint por domínio:
+
+```text
+task-manager-api/
+├── app.py
+├── database.py
+├── seed.py
+├── requirements.txt
+├── .env.example
+├── config/        settings.py
+├── models/        task · user · category
+├── services/      task · user · category · report
+├── controllers/   health · task · user · category · report
+├── routes/        health · task · user · category · report
+├── middlewares/   auth.py · error_handler.py
+└── utils/         errors · validators · helpers · logger
+```
+
+#### Checklist de validação
+
+**Fase 1 — Análise**
+- [x] Linguagem detectada corretamente (Python 3.11.4)
+- [x] Framework detectado corretamente (Flask 3.0.0 com Flask-SQLAlchemy 3.1.1)
+- [x] Domínio da aplicação descrito corretamente (gerenciador de tarefas: tasks, usuários, categorias e relatórios de produtividade)
+- [x] Número de arquivos analisados condiz com a realidade (15 arquivos, 1158 linhas)
+
+**Fase 2 — Auditoria**
+- [x] Relatório segue o template definido nos arquivos de referência
+- [x] Cada finding tem arquivo e linhas exatos
+- [x] Findings ordenados por severidade (CRITICAL → LOW)
+- [x] Mínimo de 5 findings identificados (26)
+- [x] Detecção de APIs deprecated incluída (`Query.get()` e `datetime.utcnow()`)
+- [x] Skill pausa e pede confirmação antes da Fase 3
+
+**Fase 3 — Refatoração**
+- [x] Estrutura de diretórios segue padrão MVC
+- [x] Configuração extraída para módulo de config, exceto as senhas de demonstração do seed (pendência de F03)
+- [x] Models criados para abstrair dados
+- [x] Views/Routes separadas para roteamento
+- [x] Controllers concentram o fluxo da aplicação
+- [x] Error handling centralizado
+- [x] Entry point claro
+- [x] Aplicação inicia sem erros
+- [x] Endpoints originais respondem corretamente (22/22)
+
+#### Aplicação rodando após a refatoração
+
+Inicialização com `python -W default app.py` e `ADMIN_TOKEN` definido, depois do `python seed.py`:
+
+```text
+SECRET_KEY não definida: usando chave aleatória temporária.
+ * Serving Flask app 'app'
+ * Debug mode: off
+2026-11-11 09:47:38,810 INFO werkzeug: WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:5000
+2026-11-11 09:47:38,810 INFO werkzeug: Press CTRL+C to quit
+```
+
+Requisições feitas com `curl` contra a versão original e a refatorada:
+
+| Requisição | Original | Refatorado |
+|---|---|---|
+| Leituras de tasks, usuários, categorias e relatórios | 200 | 200, com os mesmos valores |
+| `GET /users/1`, `POST /users`, `PUT /users/:id` e `POST /login` | com `password` | sem `password` |
+| `POST /login` de usuário com hash MD5 | 200 | 200, hash regravado em scrypt |
+| `POST /users` com `role: admin`, sem token | 201 | 401 |
+| `POST /users` com `role: manager` e token | 201 | 201 |
+| `POST /tasks` com `user_id: 0` | 201, referência a usuário inexistente | 404 |
+| `POST /tasks` com `priority: "alta"` | 500, página do debugger | 400, `{"error"}` |
+| `GET /tasks/search?priority=abc` | 500, página do debugger | 400, `{"error"}` |
+| `PUT /categories/1` com corpo `null` | 500, página do debugger | 400, `{"error"}` |
+| Rota inexistente | 404, HTML | 404, `{"error"}` |
+| CORS com origem desconhecida | origem aceita | sem `Access-Control-Allow-Origin` |
+| Endereço do servidor | `0.0.0.0:5000`, debug ligado | `127.0.0.1:5000`, debug desligado |
+
+As leituras foram comparadas campo a campo, ignorando datas e o `password`, e devolveram os mesmos valores nas duas versões. O banco criado pelo seed original também abriu na versão refatorada, com login funcionando. O log não registrou nenhum traceback nem aviso de deprecação; com o mesmo plano, o original gerou 14 `LegacyAPIWarning`.
