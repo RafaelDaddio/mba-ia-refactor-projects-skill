@@ -30,7 +30,9 @@ free_port() {
     lsof -ti tcp:"$port" | xargs -r kill -9
   else
     for pid in $(netstat -ano | grep -E "[:.]$port[[:space:]].*LISTEN" | awk '{print $NF}' | sort -u); do
-      taskkill //PID "$pid" //F >/dev/null 2>&1   # Git Bash no Windows: flags com //
+      # Git Bash no Windows: sem conversão de caminhos, /PID e /F chegam intactos ao taskkill,
+      # mesmo que o ambiente já tenha MSYS_NO_PATHCONV definido
+      MSYS_NO_PATHCONV=1 taskkill /PID "$pid" /F >/dev/null 2>&1
     done
   fi
 }
