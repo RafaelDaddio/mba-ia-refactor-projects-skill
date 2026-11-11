@@ -170,7 +170,9 @@ O **`validation.md`** detalha procedimentos como subir a aplicação, montar o p
 
 **Comparar em vez de checar "200".** Saber que um endpoint responde não diz se ele responde como antes. Com o baseline gravado, toda diferença depois da refatoração precisa ser uma mudança intencional: dado sensível removido, rota administrativa protegida, 4xx no lugar de 500 para entrada inválida, formato de erro padronizado.
 
-**Segurança sem quebrar clientes.** Rotas administrativas passam a exigir um token definido em variável de ambiente, e endpoints que executam SQL recebido ficam desligados por padrão. As rotas públicas não ganham autenticação, porque isso quebraria quem já as usa; a ausência fica registrada como pendência. Nenhuma dependência nova é instalada.
+**Segurança sem quebrar clientes.** Só as rotas administrativas passam a exigir um token definido em variável de ambiente: as que o projeto já marca como administrativas (`admin` no caminho ou no handler) e as que destroem dados globalmente. Endpoints que executam SQL recebido ficam desligados por padrão. As demais rotas não ganham autenticação, porque isso quebraria quem já as usa; a ausência fica registrada como pendência. Nenhuma dependência nova é instalada.
+
+**Sem regras de negócio novas.** A skill só corrige um comportamento quando o próprio código expressa a regra (um log que anuncia uma ação não executada, um estado que um cálculo ignora) ou quando ele corrompe dados (estoque negativo, e-mail duplicado usado no login). Restrições que o código não expressa, como as transições de status permitidas, ficam como recomendação.
 
 ### Anti-patterns do catálogo
 
@@ -204,3 +206,154 @@ Cada entrada descreve sinais de detecção (como "query dentro de `for`"), falso
 **Achados inventados.** Os projetos 1 e 2 não usam APIs deprecated no código, só nas dependências. Para evitar que a skill invente achados, o catálogo separa os dois casos (AP21 e AP22), e o relatório informa quando não encontra nenhuma API deprecated.
 
 **Escala de severidade incompleta.** Dependências vulneráveis, headers de resposta e modelagem de dados não se encaixam na escala do enunciado. Esses casos são classificados pelo impacto observado em cada projeto.
+
+**Calibrar o que a skill pode mudar.** Na primeira execução no projeto 1, a skill protegeu rotas comuns e criou regras de negócio que o código não tinha. Na segunda, com uma regra mais restritiva, deixou de corrigir erros evidentes. A solução foi definir de forma objetiva o que é rota administrativa e quais evidências permitem corrigir um comportamento. As três execuções estão descritas na seção C.
+
+**Auditoria de dependências sem ferramenta.** O `pip-audit` não faz parte dos projetos Python, e a skill não instala pacotes. Sem ele, ela não tem como confirmar vulnerabilidades, então registra a auditoria como recomendação em vez de citar falhas de memória.
+
+**Execução não interativa no Windows.** Para acompanhar uma execução fora do terminal interativo, a skill foi chamada com `claude -p`. No Git Bash, o argumento `/refactor-arch` era convertido num caminho do Windows (`C:/Program Files/Git/refactor-arch`) e a skill não carregava. A solução foi definir `MSYS_NO_PATHCONV=1`.
+
+---
+
+## C) Resultados
+
+A skill foi desenvolvida rodando no projeto 1: cada execução revelou um comportamento a corrigir nos arquivos de referência, até chegar à versão final. A mesma versão foi então aplicada aos projetos 2 e 3.
+
+### Resumo das auditorias
+
+| Projeto | CRITICAL | HIGH | MEDIUM | LOW | Total | Resolvidos na Fase 3 |
+|---|---|---|---|---|---|---|
+| `code-smells-project` | 8 | 5 | 13 | 6 | 32 | 28 (4 pendentes) |
+
+### Projeto 1 — `code-smells-project`
+
+#### Iterações
+
+| Execução | Findings | O que a execução revelou | Ajuste na skill |
+|---|---|---|---|
+| 1ª | 33 | Protegeu `GET /pedidos` e `GET /relatorios/vendas` como rotas administrativas, criou uma máquina de estados para o status do pedido e tirou do `/health` dados que não eram sensíveis. O relatório se contradizia sobre o schema. | Definição objetiva de rota administrativa e de dado sensível, regra contra regras de negócio novas e regra de coerência no relatório (`4374646`). |
+| 2ª | 35 | Respeitou o contrato, mas ficou conservadora: manteve o faturamento com pedidos cancelados, o e-mail duplicado e a quantidade zero como pendências. | A regra passou a aceitar como evidência o que o próprio código expressa e o que corrompe dados (`4b16fc2`). |
+| 3ª | 32 | Corrigiu os três casos sem inventar regras. | Versão final. |
+
+#### Relatório de auditoria
+
+O relatório final está em [`reports/audit-project-1.md`](reports/audit-project-1.md): 32 findings, sem APIs deprecated no código. A tabela compara os problemas da seção A com os findings da skill e o estado de cada um após a Fase 3.
+
+| Seção A | Finding | Após a Fase 3 |
+|---|---|---|
+| P1-01 SQL Injection | F01 | Resolvido |
+| P1-02 Execução de SQL por HTTP | F02 | Resolvido: exige token e fica desligado por padrão |
+| P1-03 Reset do banco sem autenticação | F03 | Resolvido |
+| P1-04 Segredos hardcoded | F07, F06 | Parcial: `SECRET_KEY` vem do ambiente e saiu do `/health`; as senhas de exemplo do seed continuam no código |
+| P1-05 Senhas em texto plano | F05 | Resolvido |
+| P1-06 God module | F08 | Resolvido |
+| P1-07 Conexão global | F10 | Resolvido |
+| P1-08 Regras espalhadas | F11 | Resolvido |
+| P1-09 Sem autenticação | F13 | Pendente: mudaria o contrato das rotas comuns |
+| P1-10 Debug com servidor exposto | F09 | Resolvido |
+| P1-11 Queries N+1 | F21 | Resolvido |
+| P1-12 Duplicação | F22 | Resolvido |
+| P1-13 Quantidade negativa ou zero | F14 | Resolvido |
+| P1-14 Schema sem restrições | F17 | Parcial: e-mail duplicado bloqueado no service; constraints exigem migração |
+| P1-15 `get_db()` com schema e seed | F23 | Resolvido |
+| P1-16 Faturamento com cancelados | F16 | Resolvido |
+| P1-17 Sem paginação | F26 | Resolvido |
+| P1-18 Formato de resposta | F24 | Resolvido |
+| P1-19 CORS aberto | F25 | Resolvido |
+| P1-20 Valores mágicos | F27 | Resolvido |
+| P1-21 Configuração fixa | F31 | Resolvido |
+| P1-22 Imports não usados | F30 | Resolvido |
+| P1-23 Dependências vulneráveis | — | Não reportado: sem `pip-audit`, ficou como recomendação |
+
+Além da seção A, a skill encontrou, entre outros, a senha devolvida por `GET /usuarios` (F04), o cancelamento que não devolve estoque (F15), a atualização de status de pedido inexistente respondendo 200 (F18) e erros do cliente convertidos em 500 (F20). Valores monetários em `REAL` e status sem `CHECK` (F32) ficaram como recomendação, porque exigem migração.
+
+#### Estrutura antes e depois
+
+Antes, quatro módulos na raiz concentravam rotas, regras, SQL e configuração:
+
+```text
+code-smells-project/
+├── app.py
+├── controllers.py
+├── database.py
+├── models.py
+└── requirements.txt
+```
+
+Depois, o `app.py` da raiz continua sendo o comando de execução e só chama `create_app` em `src/app.py`, que monta models, services e controllers e registra um blueprint por domínio:
+
+```text
+code-smells-project/
+├── app.py
+├── requirements.txt
+├── .env.example
+└── src/
+    ├── app.py
+    ├── config/        settings.py
+    ├── database/      __init__.py · schema.py · seed.py
+    ├── models/        produto · usuario · pedido · admin
+    ├── services/      produto · usuario · pedido · relatorio · admin · health · notificacao
+    ├── controllers/   produto · usuario · pedido · relatorio · admin · sistema
+    ├── routes/        produto · usuario · pedido · relatorio · admin · sistema
+    ├── middlewares/   auth.py · error_handler.py
+    └── utils/         errors.py · validators.py · logger.py
+```
+
+#### Checklist de validação
+
+**Fase 1 — Análise**
+- [x] Linguagem detectada corretamente (Python 3.11.4)
+- [x] Framework detectado corretamente (Flask 3.1.1)
+- [x] Domínio da aplicação descrito corretamente (e-commerce: produtos, usuários, pedidos e relatório de vendas)
+- [x] Número de arquivos analisados condiz com a realidade (4 arquivos, 780 linhas)
+
+**Fase 2 — Auditoria**
+- [x] Relatório segue o template definido nos arquivos de referência
+- [x] Cada finding tem arquivo e linhas exatos
+- [x] Findings ordenados por severidade (CRITICAL → LOW)
+- [x] Mínimo de 5 findings identificados (32)
+- [x] Detecção de APIs deprecated incluída (nenhuma no código)
+- [x] Skill pausa e pede confirmação antes da Fase 3
+
+**Fase 3 — Refatoração**
+- [x] Estrutura de diretórios segue padrão MVC
+- [x] Configuração extraída para módulo de config, exceto as senhas de exemplo do seed (pendência de F07)
+- [x] Models criados para abstrair dados
+- [x] Views/Routes separadas para roteamento
+- [x] Controllers concentram o fluxo da aplicação
+- [x] Error handling centralizado
+- [x] Entry point claro
+- [x] Aplicação inicia sem erros
+- [x] Endpoints originais respondem corretamente (19/19)
+
+#### Aplicação rodando após a refatoração
+
+Inicialização com `python -W default app.py` e `ADMIN_TOKEN` definido:
+
+```text
+WARNING src.app: SECRET_KEY não definida: usando chave aleatória temporária.
+WARNING src.database.seed: Seed: admin@loja.com criado com a senha de exemplo; defina SEED_ADMIN_PASSWORD ou SEED_ON_START=false fora do desenvolvimento.
+INFO src.database.seed: Banco populado com dados de exemplo.
+INFO __main__: Servidor iniciado em http://127.0.0.1:5000
+ * Serving Flask app 'src.app'
+ * Debug mode: off
+ * Running on http://127.0.0.1:5000
+```
+
+Requisições feitas com `curl` contra a versão original e a refatorada:
+
+| Requisição | Original | Refatorado |
+|---|---|---|
+| `GET /produtos`, `GET /pedidos`, `GET /relatorios/vendas` | 200 | 200 |
+| `GET /usuarios` | 200, com `senha` | 200, sem `senha` |
+| `GET /health` | 200, com `secret_key` | 200, sem `secret_key`, `db_path`, `debug` e `ambiente` |
+| `POST /login` com `admin@loja.com' --` | 200 | 401 |
+| `POST /usuarios` com e-mail já cadastrado | 201 | 409 |
+| `POST /pedidos` com quantidade −5 | 201 | 400 |
+| `POST /pedidos` para o usuário 999 | 201 | 400 |
+| `PUT /pedidos/999/status` | 200 | 404 |
+| `GET /relatorios/vendas` após cancelar um pedido | soma o cancelado | exclui o cancelado |
+| `POST /admin/reset-db` sem token | 200 | 401 |
+| `POST /admin/query` com token | 200 | 403, desligado por padrão |
+
+O log não registrou nenhum traceback nem aviso de deprecação.
