@@ -24,12 +24,18 @@ Valem durante toda a execução, inclusive depois da confirmação.
 
 1. **Nada muda antes do "y".** Nas Fases 1 e 2, use apenas leitura: Read, Glob, Grep e comandos de shell que não alteram nada (`ls`, `wc`, `cat`, `npm audit`). Não crie, edite, mova nem apague arquivos, não instale nada e não execute a aplicação até o usuário confirmar ao fim da Fase 2.
 2. **Todo finding tem evidência.** Cite `arquivo:linha` (ou intervalo) de trechos que você leu. Não reporte o que não verificou. Não force achados para preencher o catálogo — em especial APIs deprecated: só reporte quando o uso está no código e a deprecação vale para a versão em uso ou para versões posteriores da mesma dependência.
-3. **O contrato externo não muda.** Preserve métodos e caminhos dos endpoints, nomes dos campos de entrada, chaves das respostas de sucesso, comandos de execução (ex.: `python app.py`, `npm start`) e scripts auxiliares (ex.: `seed.py`). Exceções permitidas, sempre listadas no resumo final como mudanças intencionais: remover dados sensíveis das respostas, proteger rotas administrativas, devolver 4xx em vez de 500 para entrada inválida e padronizar o formato dos erros.
-4. **Ignore o que não é código do projeto:** `.git/`, `.venv/`, `venv/`, `env/`, `node_modules/`, `__pycache__/`, `instance/`, `dist/`, `build/`, `.claude/`, `*.db`, `*.sqlite*`, `*.pyc` e lockfiles (estes só para ler versões).
-5. **Git pertence ao usuário.** Nunca execute `git add`, `commit`, `checkout`, `restore`, `stash`, `reset` ou `push`.
-6. **Sem dependências novas.** Não instale nem atualize pacotes sem perguntar. Use a biblioteca padrão e o que já está instalado. Dependências vulneráveis ficam como pendência no resumo final.
-7. **Sem arquivos avulsos.** Não crie notas, planos, `CLAUDE.md`, scripts de apoio ou documentação além do previsto em `mvc-guidelines.md` e do relatório no caminho do argumento.
-8. **Validação honesta.** Só marque ✓ com evidência de execução. Se algo falhou, diga o que falhou e por quê.
+3. **O contrato externo não muda.** Preserve métodos e caminhos dos endpoints, nomes dos campos de entrada, chaves das respostas de sucesso, comandos de execução (ex.: `python app.py`, `npm start`) e scripts auxiliares (ex.: `seed.py`). Exceções permitidas, sempre listadas no resumo final como mudanças intencionais:
+   - **Remover dados sensíveis das respostas:** segredos, senhas e hashes, dados de cartão e configuração interna (chaves, caminhos, flags de debug). Contagens, versões e outros dados de negócio continuam na resposta.
+   - **Exigir credencial nas rotas administrativas**, que são somente: (a) as que o próprio projeto marca como administrativas — `admin` no caminho ou no nome do handler, ou um middleware de administração já existente; (b) operações destrutivas globais — reset ou purge do banco, exclusão em massa, execução de SQL ou comandos recebidos na requisição. CRUD de um recurso individual (ex.: `DELETE /items/:id`) e leituras comuns, mesmo de dados de outros usuários, não são administrativos: a falta de autenticação nelas é finding AP10 e fica como pendência.
+   - Devolver 4xx em vez de 500 para entrada inválida.
+   - Padronizar o formato dos erros.
+   - Corrigir comportamento errado dentro dos limites da regra 4.
+4. **Sem regras de negócio novas.** Corrija um comportamento só quando o erro tem evidência no próprio código (ex.: um log ou comentário que anuncia uma ação que o código não executa; uma validação aplicada na criação e esquecida na atualização) ou quando ele corrompe dados (estoque ou total negativo, referência a registro inexistente). Restrições que o código não expressa — como quais transições de status são permitidas — ficam como recomendação no resumo final.
+5. **Ignore o que não é código do projeto:** `.git/`, `.venv/`, `venv/`, `env/`, `node_modules/`, `__pycache__/`, `instance/`, `dist/`, `build/`, `.claude/`, `*.db`, `*.sqlite*`, `*.pyc` e lockfiles (estes só para ler versões).
+6. **Git pertence ao usuário.** Nunca execute `git add`, `commit`, `checkout`, `restore`, `stash`, `reset` ou `push`.
+7. **Sem dependências novas.** Não instale nem atualize pacotes sem perguntar. Use a biblioteca padrão e o que já está instalado. Dependências vulneráveis ficam como pendência no resumo final.
+8. **Sem arquivos avulsos.** Não crie notas, planos, `CLAUDE.md`, scripts de apoio ou documentação além do previsto em `mvc-guidelines.md` e do relatório no caminho do argumento.
+9. **Validação honesta.** Só marque ✓ com evidência de execução. Se algo falhou, diga o que falhou e por quê.
 
 ## Fase 1 — Análise
 
@@ -51,7 +57,7 @@ Entry point:   <arquivo> — run: <comando>
 ================================
 ```
 
-3. Em seguida, imprima o **inventário de endpoints** como tabela: método, caminho, handler (`arquivo:linha`), campos de entrada e se a rota é administrativa ou destrutiva. Esse inventário é o contrato que a Fase 3 preserva e a lista que ela valida.
+3. Em seguida, imprima o **inventário de endpoints** como tabela: método, caminho, handler (`arquivo:linha`), campos de entrada e se a rota é administrativa pela definição da regra 3. Esse inventário é o contrato que a Fase 3 preserva e a lista que ela valida.
 4. Siga direto para a Fase 2, sem pedir confirmação.
 
 ## Fase 2 — Auditoria
@@ -80,7 +86,7 @@ Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]
 1. Leia `${CLAUDE_SKILL_DIR}/references/mvc-guidelines.md`, `${CLAUDE_SKILL_DIR}/references/refactoring-playbook.md` e `${CLAUDE_SKILL_DIR}/references/validation.md`.
 2. **Baseline.** Antes de alterar qualquer arquivo do projeto, siga a seção "Baseline" de `validation.md`: suba a aplicação original, execute o plano de requisições sobre o inventário de endpoints, registre status e formato de cada resposta, pare a aplicação e remova os arquivos de dados que o baseline criou.
 3. **Plano.** Escolha a estratégia pelo tipo de arquitetura da Fase 1 (seção "Estratégia por tipo" de `mvc-guidelines.md`), defina a estrutura alvo e imprima-a junto com os findings que cada etapa resolve. Não peça nova confirmação.
-4. **Execução.** Aplique as transformações na ordem do playbook. Ao fim de cada etapa estrutural, faça a checagem estática e uma subida rápida da aplicação; corrija antes de seguir. Remova os módulos antigos substituídos e atualize os imports dos scripts auxiliares.
+4. **Execução.** Aplique as transformações na ordem do playbook. Recomendações do relatório que as regras 3 e 4 não permitem não são implementadas: vão para "Pending" no resumo final, com o motivo. Ao fim de cada etapa estrutural, faça a checagem estática e uma subida rápida da aplicação; corrija antes de seguir. Remova os módulos antigos substituídos e atualize os imports dos scripts auxiliares.
 5. **Validação final.** Siga `validation.md`: checagem estática, subida com o comando original, o mesmo plano de requisições do baseline e a comparação. Toda diferença precisa constar da lista de mudanças intencionais; caso contrário, é falha. Corrija e valide de novo, no máximo 3 tentativas por falha; se persistir, pare e reporte.
 6. **Encerramento.** Pare todos os processos que você iniciou, libere as portas e remova os arquivos de dados criados pela validação.
 7. Imprima o resumo final neste formato:

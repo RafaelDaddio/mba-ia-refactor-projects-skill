@@ -5,7 +5,7 @@ Objetivo: descrever o projeto com fatos verificáveis (stack, versões, banco, d
 ## 1. Inventário de arquivos
 
 1. Liste os arquivos de código com Glob, por extensão: `**/*.py`, `**/*.js`, `**/*.mjs`, `**/*.cjs`, `**/*.ts`, `**/*.java`, `**/*.kt`, `**/*.go`, `**/*.rb`, `**/*.php`, `**/*.cs`.
-2. Descarte tudo que estiver em diretórios ignorados (regra 4 do `SKILL.md`). O Glob pode devolver arquivos de `.venv/` e `node_modules/`: filtre explicitamente.
+2. Descarte tudo que estiver em diretórios ignorados (regra 5 do `SKILL.md`). O Glob pode devolver arquivos de `.venv/` e `node_modules/`: filtre explicitamente.
 3. **Source files** = arquivos de código do próprio projeto, incluindo scripts auxiliares (`seed.py`, `migrate.js`) e `__init__.py`. Não entram manifestos, lockfiles, `.http`, README nem arquivos de dados.
 4. **Linhas** = soma das linhas dos arquivos-fonte (`wc -l` ou a contagem do Read).
 5. Registre à parte, sem contar como fonte: manifestos, lockfiles, `.env*`, `*.http`/`*.rest`, coleções Postman, README e arquivos de dados existentes (`*.db`, `*.sqlite*`, `instance/`).
@@ -96,7 +96,7 @@ Para cada endpoint, registre:
 - método e caminho completo (com prefixos);
 - handler (`arquivo:linha`);
 - campos de entrada: chaves lidas do corpo (`request.get_json()`, `dados["x"]`, `data.get("x")`, `req.body.x`), da query string (`request.args.get`, `req.query`) e parâmetros de caminho;
-- se é administrativo ou destrutivo (apaga dados, executa SQL ou comandos, expõe relatórios internos).
+- se é administrativo pela definição da regra 3 do `SKILL.md`.
 
 Procure também exemplos de requisição: `*.http`, `*.rest`, coleções Postman e comandos `curl` no README. Eles são a melhor fonte de payloads válidos para a Fase 3.
 

@@ -4,7 +4,7 @@ A validação compara a aplicação refatorada com a original. A pergunta não �
 
 ## 1. Preparação
 
-- **Interpretador:** Python → `.venv/Scripts/python` (Windows) ou `.venv/bin/python` (Unix); sem venv, `python3`/`python`. Node → `node`/`npm`, com `node_modules/` já instalado. Se as dependências não estiverem instaladas, pare e peça ao usuário para instalá-las (regra 6).
+- **Interpretador:** Python → `.venv/Scripts/python` (Windows) ou `.venv/bin/python` (Unix); sem venv, `python3`/`python`. Node → `node`/`npm`, com `node_modules/` já instalado. Se as dependências não estiverem instaladas, pare e peça ao usuário para instalá-las (regra 7).
 - **Comando e porta:** os levantados na Fase 1.
 - **Arquivos de dados:** anote quais já existem (`*.db`, `*.sqlite*`, `instance/`). Você só pode apagar os que a validação criar.
 - **Logs:** grave a saída do servidor fora do projeto, em `${TMPDIR:-/tmp}/refactor-arch-<projeto>-<etapa>.log`.
@@ -79,12 +79,12 @@ Corrija antes de seguir para a próxima etapa.
 | Situação | Resultado |
 |---|---|
 | Mesmo status e mesmas chaves de primeiro nível | ✓ |
-| Diferença listada como mudança intencional (dado sensível removido, rota administrativa protegida, 500 → 4xx para entrada inválida, formato de erro padronizado, cálculo corrigido) | ✓ com nota |
+| Diferença listada como mudança intencional e permitida pelas regras 3 e 4 do `SKILL.md` (dado sensível removido, rota administrativa protegida, 500 → 4xx para entrada inválida, formato de erro padronizado, erro com evidência no código corrigido) | ✓ com nota |
 | Qualquer outra diferença | ✗ — corrigir e validar de novo |
 
 7. Pare tudo, rode `free_port` e apague os arquivos de dados criados pela validação.
 
-Se uma falha persistir depois de 3 tentativas de correção, pare e reporte o que falhou, a causa provável e o que falta. Não reverta arquivos com git (regra 5).
+Se uma falha persistir depois de 3 tentativas de correção, pare e reporte o que falhou, a causa provável e o que falta. Não reverta arquivos com git (regra 6).
 
 ## 6. Checklist do resumo final
 

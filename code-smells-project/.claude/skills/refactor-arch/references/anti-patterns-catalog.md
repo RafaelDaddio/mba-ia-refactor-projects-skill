@@ -85,7 +85,7 @@ SQL montado juntando strings com valores vindos de fora.
 ### AP04 — Exposição de dados sensíveis
 
 - **Sinais:** serialização (`to_dict`, dict de resposta, `res.json`) com `password`/`senha`/hash; endpoints de health, debug ou info que devolvem segredos, caminhos ou flags internas; `print`/`console.log` com número de cartão, senha, token ou chave.
-- **Não confundir:** campos sensíveis lidos apenas internamente e nunca devolvidos ou logados.
+- **Não confundir:** campos sensíveis lidos apenas internamente e nunca devolvidos ou logados; contagens, versões e outros dados de negócio em endpoints de health ou info (não são sensíveis e continuam na resposta).
 - **Correção:** PB04.
 
 ### AP05 — God Class / God Module
@@ -96,8 +96,9 @@ SQL montado juntando strings com valores vindos de fora.
 
 ### AP06 — Endpoint administrativo ou destrutivo desprotegido
 
-- **Sinais:** rotas com `admin`, `reset`, `drop`, `purge`, `query`, `exec` ou exclusões em massa sem verificação de identidade ou papel; execução de SQL ou código vindo da requisição (`execute(request...)`, `eval`, `exec`, `child_process` com entrada externa); relatórios administrativos com dados pessoais ou financeiros acessíveis a qualquer cliente; `DELETE` de recursos de terceiros sem verificação.
-- **Separar em findings:** execução arbitrária (pior caso), destruição de dados e exposição de relatório são findings distintos.
+- **Sinais:** rota administrativa pela definição da regra 3 do `SKILL.md` sem verificação de credencial: `admin` no caminho ou no nome do handler; reset, purge, drop ou exclusão em massa; execução de SQL ou código vindo da requisição (`execute(request...)`, `eval`, `exec`, `child_process` com entrada externa).
+- **Não confundir:** CRUD de recurso individual e leituras comuns sem autenticação, mesmo de dados de outros usuários (ex.: `DELETE /items/:id`, listagem geral, relatório fora de `/admin`). São AP10.
+- **Separar em findings:** execução arbitrária (pior caso), destruição de dados e exposição de relatório administrativo são findings distintos.
 - **Correção:** PB06.
 
 ## HIGH
@@ -120,8 +121,8 @@ SQL montado juntando strings com valores vindos de fora.
 
 ### AP10 — Autenticação ausente ou de fachada
 
-- **Sinais:** login que não emite token nem sessão, ou que emite token previsível (`'token-' + id`) que nenhuma rota verifica; nenhuma rota exige identidade; o cliente define o próprio `role`/`tipo`/`is_admin` no cadastro ou na atualização.
-- **Correção:** PB06 para as rotas administrativas. Autenticação nas rotas públicas fica como recomendação, porque mudaria o contrato.
+- **Sinais:** login que não emite token nem sessão, ou que emite token previsível (`'token-' + id`) que nenhuma rota verifica; nenhuma rota exige identidade; rotas comuns que expõem ou alteram dados de outros usuários sem identificar quem pede (listagem geral, relatório fora de `/admin`, exclusão de recurso de terceiros); o cliente define o próprio `role`/`tipo`/`is_admin` no cadastro ou na atualização.
+- **Correção:** PB06 só para as rotas administrativas da regra 3 do `SKILL.md` e para impedir que o cliente defina o próprio papel. Nas demais rotas, autenticação fica como recomendação e o finding fica pendente, porque mudaria o contrato.
 
 ### AP11 — Debug ligado e servidor exposto no entry point
 
@@ -160,7 +161,7 @@ SQL montado juntando strings com valores vindos de fora.
 ### AP17 — Integridade de dados e regras de estado
 
 - **Sinais:** schema sem `NOT NULL`, `UNIQUE` ou `FOREIGN KEY` (no SQLite, também sem `PRAGMA foreign_keys = ON`); escrita em vários passos sem transação; exclusão que deixa registros órfãos ou responde sucesso sem verificar se o recurso existe; duplicidades aceitas (pedido ou matrícula repetidos); transições de estado livres; cálculos que ignoram o estado (somar cancelados no faturamento).
-- **Correção:** PB12.
+- **Correção:** PB12. Restrições que o código não declara (ex.: quais transições de status são permitidas) entram no relatório só como recomendação (regra 4 do `SKILL.md`).
 
 ### AP18 — CORS e middlewares inadequados
 

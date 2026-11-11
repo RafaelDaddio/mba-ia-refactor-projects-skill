@@ -112,15 +112,16 @@ class Settings:
     def __init__(self, env=None):
         env = os.environ if env is None else env
         self.debug = _as_bool(env.get("APP_DEBUG"))
-        self.host = env.get("APP_HOST", "127.0.0.1")
-        self.port = int(env.get("APP_PORT", "5000"))
-        self.database_path = env.get("DATABASE_PATH", str(BASE_DIR / "app.db"))
+        # `or`: variável definida mas vazia vale como ausente
+        self.host = env.get("APP_HOST") or "127.0.0.1"
+        self.port = int(env.get("APP_PORT") or "5000")
+        self.database_path = env.get("DATABASE_PATH") or str(BASE_DIR / "app.db")
         self.seed_on_start = _as_bool(env.get("SEED_ON_START"), default=True)
         self.secret_key = env.get("SECRET_KEY") or self._ephemeral_secret()
-        self.admin_token = env.get("ADMIN_TOKEN")
+        self.admin_token = env.get("ADMIN_TOKEN") or None
         self.cors_origins = [
             origin.strip()
-            for origin in env.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+            for origin in (env.get("CORS_ORIGINS") or "http://localhost:3000").split(",")
             if origin.strip()
         ]
 
@@ -164,7 +165,7 @@ function loadConfig(env = process.env) {
 module.exports = { loadConfig };
 ```
 
-**Cuidados:** mantenha a porta original como padrão; o padrão de seed deve preservar o comportamento documentado do projeto; credenciais sem uso no código são removidas, não migradas; documente as variáveis em `.env.example`. Trocar o host padrão para `127.0.0.1` é mudança intencional.
+**Cuidados:** mantenha a porta original como padrão; o padrão de seed deve preservar o comportamento documentado do projeto; credenciais sem uso no código são removidas, não migradas; documente as variáveis em `.env.example`, informando que são lidas do ambiente do processo — só sugira copiar para `.env` se o projeto já carrega esse arquivo (ex.: `python-dotenv`, `dotenv`). Trocar o host padrão para `127.0.0.1` é mudança intencional.
 
 ## PB03 — Hash de senha com biblioteca já disponível
 
@@ -410,10 +411,10 @@ function adminAuth(adminToken) {
   };
 }
 
-// uso: router.delete('/users/:id', adminAuth(config.adminToken), asyncHandler(userController.remove));
+// uso: router.post('/admin/reset', adminAuth(config.adminToken), asyncHandler(adminController.reset));
 ```
 
-**Cuidados:** o caminho e o método continuam os mesmos; sem o header, a resposta passa a ser 401 (ou 403 para recurso desabilitado) — mudança intencional. Não adicione autenticação obrigatória às rotas públicas: registre essa ausência como pendência. Impeça que o cliente defina o próprio papel administrativo (campo `role`/`tipo` ignorado ou restrito a administradores) e liste a mudança.
+**Cuidados:** aplique só às rotas administrativas da regra 3 do `SKILL.md`. O caminho e o método continuam os mesmos; sem o header, a resposta passa a ser 401 (ou 403 para recurso desabilitado) — mudança intencional. Não adicione autenticação obrigatória às rotas públicas: registre essa ausência como pendência. Impeça que o cliente defina o próprio papel administrativo (campo `role`/`tipo` ignorado ou restrito a administradores) e liste a mudança.
 
 ## PB07 — Extrair regras de negócio para services
 
@@ -894,7 +895,7 @@ const enrollment = await db.transaction(async () => {
 });
 ```
 
-**Cuidados:** `CREATE TABLE IF NOT EXISTS` não altera tabelas existentes; bancos antigos continuam com o schema antigo — avise no resumo. Ao ligar chaves estrangeiras, escolha a ação de exclusão compatível com o comportamento atual, para que exclusões que hoje funcionam continuem funcionando. Regras de transição só entram quando estão evidentes no domínio; caso contrário, ficam como recomendação.
+**Cuidados:** `CREATE TABLE IF NOT EXISTS` não altera tabelas existentes; bancos antigos continuam com o schema antigo — avise no resumo. Ao ligar chaves estrangeiras, escolha a ação de exclusão compatível com o comportamento atual, para que exclusões que hoje funcionam continuem funcionando. Regras de transição só entram quando já estão declaradas no código (ex.: uma tabela de transições existente); caso contrário, ficam como recomendação (regra 4 do `SKILL.md`).
 
 ## PB13 — Substituir APIs deprecated
 

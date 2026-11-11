@@ -80,7 +80,8 @@ Regras do layout:
 - **Valores não secretos** têm padrão seguro para desenvolvimento: porta original, debug desligado, host `127.0.0.1`.
 - **Segredos** não têm valor padrão no código. Se faltarem em desenvolvimento, gere um valor aleatório na inicialização e registre um aviso; recursos que dependem de um segredo externo (ex.: chave de gateway de pagamento) ficam desabilitados até ele ser configurado.
 - Caminhos de arquivo são resolvidos a partir do diretório do projeto, não do diretório de execução.
-- Documente cada variável em `.env.example`, sem valores reais.
+- Variável definida mas vazia vale como ausente (usa o padrão).
+- Documente cada variável em `.env.example`, sem valores reais, informando que são lidas do ambiente do processo. Só sugira um arquivo `.env` se o projeto já o carrega.
 
 ## 7. Tratamento de erros
 

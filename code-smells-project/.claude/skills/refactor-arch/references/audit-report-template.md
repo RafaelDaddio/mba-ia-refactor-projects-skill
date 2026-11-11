@@ -51,7 +51,9 @@ Total: <N> findings
 4. **Deprecated APIs** é sempre impressa. Sem ocorrências, escreva no lugar da tabela: "Nenhuma API deprecated encontrada no código-fonte." Se houver pacotes deprecated na árvore de dependências, acrescente uma linha apontando o finding AP22 correspondente.
 5. **Fora do catálogo:** use `AP-- (fora do catálogo)` no campo Anti-pattern.
 6. **Sem conteúdo inventado:** cada Description cita o que foi lido; nada de "provavelmente" sem evidência.
-7. O relatório **não** inclui a pergunta de confirmação; ela vem depois, fora do relatório.
+7. **Coerência:** um mesmo fato aparece igual em todos os findings que o citam. Antes de imprimir, confira os findings que tratam do mesmo arquivo ou mecanismo (ex.: se um diz que o banco persiste entre execuções, nenhum outro pode dizer que o schema é recriado a cada boot).
+8. **Recomendações dentro das regras 3 e 4 do `SKILL.md`:** quando a correção completa mudaria o contrato além das exceções permitidas ou criaria uma regra de negócio que o código não declara, diga na Recommendation que essa parte fica como pendência.
+9. O relatório **não** inclui a pergunta de confirmação; ela vem depois, fora do relatório.
 
 ## Exemplo de finding preenchido
 
