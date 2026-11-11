@@ -211,7 +211,7 @@ Cada entrada descreve sinais de detecção (como "query dentro de `for`"), falso
 
 **Auditoria de dependências sem ferramenta.** O `pip-audit` não faz parte dos projetos Python, e a skill não instala pacotes. Sem ele, ela não tem como confirmar vulnerabilidades, então registra a auditoria como recomendação em vez de citar falhas de memória.
 
-**Execução não interativa no Windows.** Para acompanhar uma execução fora do terminal interativo, a skill foi chamada com `claude -p`. No Git Bash, o argumento `/refactor-arch` era convertido num caminho do Windows (`C:/Program Files/Git/refactor-arch`) e a skill não carregava. A solução foi definir `MSYS_NO_PATHCONV=1`.
+**Execução não interativa no Windows.** Para acompanhar uma execução fora do terminal interativo, a skill foi chamada com `claude -p`. No Git Bash, o argumento `/refactor-arch` era convertido num caminho do Windows (`C:/Program Files/Git/refactor-arch`) e a skill não carregava. A solução foi definir `MSYS_NO_PATHCONV=1`. Essa variável, porém, foi herdada pelos comandos da própria skill e quebrou o `taskkill //PID` que liberava a porta, porque o `//` dependia justamente da conversão. A skill contornou o problema com outros comandos, e o `validation.md` passou a usar `MSYS_NO_PATHCONV=1 taskkill /PID`, que funciona com ou sem a variável no ambiente.
 
 ---
 
@@ -224,6 +224,7 @@ A skill foi desenvolvida rodando no projeto 1: cada execução revelou um compor
 | Projeto | CRITICAL | HIGH | MEDIUM | LOW | Total | Resolvidos na Fase 3 |
 |---|---|---|---|---|---|---|
 | `code-smells-project` | 8 | 5 | 13 | 6 | 32 | 28 (4 pendentes) |
+| `ecommerce-api-legacy` | 5 | 6 | 11 | 7 | 29 | 25 (4 pendentes) |
 
 ### Projeto 1 — `code-smells-project`
 
@@ -357,3 +358,127 @@ Requisições feitas com `curl` contra a versão original e a refatorada:
 | `POST /admin/query` com token | 200 | 403, desligado por padrão |
 
 O log não registrou nenhum traceback nem aviso de deprecação.
+
+### Projeto 2 — `ecommerce-api-legacy`
+
+#### Execução
+
+A versão final da skill funcionou no projeto 2 na primeira execução, sem ajuste nas regras. A única correção depois dela foi no procedimento de liberar a porta, descrita em "Desafios encontrados".
+
+O projeto tem só três rotas, e a definição de rota administrativa fez diferença: `GET /api/admin/financial-report` passou a exigir token, enquanto `DELETE /api/users/:id`, que é exclusão de um recurso individual, continuou pública e ficou registrada como pendência. Pela regra de negócio, a matrícula repetida passou a ser recusada, porque gera cobrança em dobro. Já a senha ignorada quando o e-mail já existe ficou como recomendação, porque o código não declara essa verificação.
+
+#### Relatório de auditoria
+
+O relatório está em [`reports/audit-project-2.md`](reports/audit-project-2.md): 29 findings, sem APIs deprecated no código. Os pacotes deprecated da árvore de dependências estão no F16.
+
+| Seção A | Finding | Após a Fase 3 |
+|---|---|---|
+| P2-01 Segredos hardcoded | F03 | Resolvido: credenciais removidas do código; a rotação das que estão no histórico do git fica como recomendação |
+| P2-02 Cartão e chave no log | F02 | Resolvido: o log mostra só `**** 4444` |
+| P2-03 God Class | F05 | Resolvido |
+| P2-04 Rotas administrativas e destrutivas sem autenticação | F01, F07 | Parcial: o relatório exige token; `DELETE /api/users/:id` continua público |
+| P2-05 Um request derruba o servidor | F06 | Resolvido |
+| P2-06 Sem injeção de dependência | F10 | Resolvido |
+| P2-07 N+1 no relatório | F18 | Resolvido |
+| P2-08 Callbacks aninhados | F19 | Resolvido |
+| P2-09 Erros ignorados | F15, F13 | Resolvido |
+| P2-10 Validação do checkout | F17 | Parcial: tipos validados com 400; formato de e-mail e de cartão fica como recomendação |
+| P2-11 Matrícula duplicada e senha ignorada | F12, F08 | Parcial: matrícula repetida recusada com 409; a senha da conta existente continua sem verificação |
+| P2-12 Exclusão deixa órfãos | F13 | Resolvido |
+| P2-13 Dependências vulneráveis | F16 | Pendente: atualizar pacotes exige aprovação |
+| P2-14 Valores mágicos | F23 | Resolvido |
+| P2-15 Código morto | F24 | Resolvido |
+| P2-16 `self = this` com arrow functions | F19, F28 | Resolvido |
+| P2-17 Configuração fixa | F26 | Resolvido |
+| P2-18 `X-Powered-By` | F25 | Resolvido |
+
+Além da seção A, a skill encontrou o hash de senha caseiro que gera o mesmo valor para `"123"` e `"123456"` (F04), o cache global que cresce e nunca é lido (F11), o checkout gravado sem transação (F14) e o campo `paid` do relatório ignorando o status do pagamento (F22). Valores monetários em `REAL` (F29) ficaram como recomendação.
+
+#### Estrutura antes e depois
+
+Antes, a classe `AppManager` concentrava conexão, schema, seed, rotas, SQL e regras:
+
+```text
+ecommerce-api-legacy/
+├── package.json
+├── api.http
+└── src/
+    ├── app.js
+    ├── AppManager.js
+    └── utils.js
+```
+
+Depois, `npm start` continua executando `src/app.js`, que virou a composition root: `createApp({ db, config })` monta models, services e controllers com as dependências injetadas, e `main()` abre o banco, cria o schema e sobe o servidor:
+
+```text
+ecommerce-api-legacy/
+├── package.json
+├── api.http
+├── .env.example
+└── src/
+    ├── app.js
+    ├── config/        index.js
+    ├── database/      connection.js · schema.js
+    ├── models/        user · course · enrollment · payment · auditLog · report
+    ├── services/      checkout · report · user
+    ├── controllers/   checkout · report · user
+    ├── routes/        checkout · report · user
+    ├── middlewares/   adminAuth · asyncHandler · errorHandler
+    └── utils/         errors · logger · password · validators
+```
+
+A skill também atualizou o `README.md` e o `api.http` do projeto para mostrar o header `X-Admin-Token`, já que o exemplo do relatório deixaria de funcionar sem ele.
+
+#### Checklist de validação
+
+**Fase 1 — Análise**
+- [x] Linguagem detectada corretamente (JavaScript, Node.js v24.18.0)
+- [x] Framework detectado corretamente (Express 4.22.1)
+- [x] Domínio da aplicação descrito corretamente (LMS com checkout: cursos, usuários, matrículas, pagamentos e relatório financeiro)
+- [x] Número de arquivos analisados condiz com a realidade (3 arquivos, 180 linhas)
+
+**Fase 2 — Auditoria**
+- [x] Relatório segue o template definido nos arquivos de referência
+- [x] Cada finding tem arquivo e linhas exatos
+- [x] Findings ordenados por severidade (CRITICAL → LOW)
+- [x] Mínimo de 5 findings identificados (29)
+- [x] Detecção de APIs deprecated incluída (nenhuma no código; pacotes deprecated apontados no F16)
+- [x] Skill pausa e pede confirmação antes da Fase 3
+
+**Fase 3 — Refatoração**
+- [x] Estrutura de diretórios segue padrão MVC
+- [x] Configuração extraída para módulo de config
+- [x] Models criados para abstrair dados
+- [x] Views/Routes separadas para roteamento
+- [x] Controllers concentram o fluxo da aplicação
+- [x] Error handling centralizado
+- [x] Entry point claro
+- [x] Aplicação inicia sem erros
+- [x] Endpoints originais respondem corretamente (3/3)
+
+#### Aplicação rodando após a refatoração
+
+Inicialização com `npm start` e `ADMIN_TOKEN` definido:
+
+```text
+> desafio-arquitetura-ia-boilerplate@1.0.0 start
+> node src/app.js
+
+{"level":"info","msg":"Banco populado com os dados de exemplo"}
+{"level":"info","msg":"LMS API rodando em http://127.0.0.1:3000"}
+{"level":"info","msg":"Processando pagamento","card":"**** 4444","courseId":2,"userId":2}
+```
+
+Requisições feitas com `curl` contra a versão original e a refatorada:
+
+| Requisição | Original | Refatorado |
+|---|---|---|
+| `POST /api/checkout` com o exemplo de sucesso do `api.http` | 200 | 200 |
+| `POST /api/checkout` com pagamento recusado | 400, texto | 400, `{"error"}` |
+| `POST /api/checkout` repetindo a mesma compra | 200, nova cobrança | 409 |
+| `POST /api/checkout` com `card` numérico | processo encerrado | 400, servidor continua no ar |
+| `GET /api/admin/financial-report` sem token | 200 | 401 |
+| `GET /api/admin/financial-report` com token | 200 | 200 |
+| `DELETE /api/users/9999` | 200, "Usuário deletado" | 404 |
+| Relatório depois de excluir um usuário | aluno `Unknown` | sem registros órfãos |
+| Header `X-Powered-By` | `Express` | ausente |
