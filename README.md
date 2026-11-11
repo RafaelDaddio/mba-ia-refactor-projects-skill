@@ -619,3 +619,125 @@ Requisições feitas com `curl` contra a versão original e a refatorada:
 | Endereço do servidor | `0.0.0.0:5000`, debug ligado | `127.0.0.1:5000`, debug desligado |
 
 As leituras foram comparadas campo a campo, ignorando datas e o `password`, e devolveram os mesmos valores nas duas versões. O banco criado pelo seed original também abriu na versão refatorada, com login funcionando. O log não registrou nenhum traceback nem aviso de deprecação; com o mesmo plano, o original gerou 14 `LegacyAPIWarning`.
+
+### Comportamento em stacks diferentes
+
+A tabela mede a skill contra os problemas da seção A. As colunas de resolvidos, parciais e pendentes contam só os problemas encontrados.
+
+| Projeto | Stack | Tipo | Encontrados | Resolvidos | Parciais | Pendentes |
+|---|---|---|---|---|---|---|
+| `code-smells-project` | Flask + sqlite3 | A | 22 de 23 | 19 | 2 | 1 |
+| `ecommerce-api-legacy` | Express + sqlite3 | A | 18 de 18 | 14 | 3 | 1 |
+| `task-manager-api` | Flask + Flask-SQLAlchemy | B | 22 de 22 | 17 | 3 | 2 |
+
+**Detecção.** A Fase 1 acertou linguagem, framework, versão e domínio nos três projetos. Nos projetos Python, as versões vieram do venv e dos pacotes instalados; no Node, do runtime e do lockfile. No projeto 3, a skill também registrou o SQLAlchemy 2.1.8, que o `requirements.txt` não fixa e que define quais APIs estão deprecated.
+
+**Estrutura por tipo.** Os projetos 1 e 2 eram monolitos (tipo A) e ganharam a estrutura do zero em `src/`, com o entry point original só chamando a composition root. O projeto 3 já tinha pastas de camadas (tipo B), e a skill as manteve na raiz, completando as que faltavam.
+
+**Idiomas de cada stack.** O MVC foi o mesmo, mas a implementação seguiu cada stack. No Flask com sqlite3, a conexão passou a ser aberta por requisição em `flask.g`. Com Flask-SQLAlchemy, as consultas foram para os models, com `GROUP BY` e carga em lote. No Node, o driver `sqlite3` só oferece callbacks, então a skill criou um wrapper em Promises, com fila de transações, para usar `async/await`. Para hash de senha, usou o que já estava instalado: `werkzeug.security` no Flask e `crypto.scrypt` no Node.
+
+**Falhas diferentes, mesma solução.** No Node, uma exceção não tratada derrubava o processo inteiro. No Flask, o modo debug transformava qualquer erro numa página com código-fonte. Nos dois casos, a skill centralizou o tratamento de erros e passou a responder JSON, com 4xx para entrada inválida.
+
+**Banco existente.** O tipo de banco mudou o que dava para corrigir no schema. No projeto 2, o banco em memória é recriado a cada boot, então a skill adicionou `UNIQUE` e chaves estrangeiras. Nos projetos 1 e 3, o banco em arquivo pode já ter dados, e mudar o schema exigiria migração. Por isso, as restrições ficaram como recomendação, e a skill manteve a compatibilidade com os dados antigos: no projeto 3, hashes MD5 já gravados continuam autenticando e são regravados no login.
+
+**Dependências.** O `npm audit` já vem com o npm, e a skill confirmou 13 vulnerabilidades no projeto 2. Nos projetos Python, sem `pip-audit` instalado, ela não confirmou falhas e registrou a auditoria como recomendação. Nos três casos, atualizar pacotes ficou pendente, porque exige aprovação.
+
+**APIs deprecated.** Só o projeto 3 usava APIs deprecated no código, e a skill as confirmou na versão instalada. Nos projetos 1 e 2, o relatório informou que não havia nenhuma, em vez de inventar achados.
+
+**Mesmas regras, decisões coerentes.** As regras de contrato e de regra de negócio levaram a decisões parecidas nas três stacks. A autenticação geral ficou pendente em todos os projetos, e só ganharam token as rotas que o projeto já marcava como administrativas: `/admin/*` no projeto 1 e o relatório financeiro no projeto 2. As correções de dados vieram de evidências no código: pedidos cancelados somados ao faturamento, matrícula cobrada duas vezes, task apontando para usuário inexistente. A interpretação mais ampla foi a do papel `admin` no projeto 3, tratado como dado de identidade.
+
+**Ambiente, não stack.** Os dois ajustes feitos depois da versão final foram no procedimento de liberar a porta e dependiam do Windows, não da linguagem: um apareceu no projeto Node e o outro no Flask com debug.
+
+---
+
+## D) Como Executar
+
+### Pré-requisitos
+
+- **Claude Code** instalado e autenticado.
+- **Python 3.11** para os projetos 1 e 3, com um venv por projeto, porque as versões do Flask (3.1.1 e 3.0.0) conflitam.
+- **Node.js e npm** para o projeto 2 (testado com o Node 24).
+- **Bash com `curl`**, usado na validação da Fase 3: o Git Bash no Windows, ou o shell padrão com `lsof` no Linux e no macOS.
+- **Dependências instaladas antes de rodar a skill.** Ela não instala pacotes: se faltar alguma, para e pede a instalação.
+
+Os projetos 1 e 3 usam a porta 5000, então rode um de cada vez.
+
+### Instalação das dependências
+
+```bash
+# Projeto 1
+cd code-smells-project
+python -m venv .venv
+.venv/Scripts/pip install -r requirements.txt   # Linux/macOS: .venv/bin/pip
+
+# Projeto 2
+cd ecommerce-api-legacy
+npm ci
+
+# Projeto 3
+cd task-manager-api
+python -m venv .venv
+.venv/Scripts/pip install -r requirements.txt   # Linux/macOS: .venv/bin/pip
+```
+
+### Rodando a skill
+
+A skill já está em `.claude/skills/refactor-arch/` de cada projeto. Abra o Claude Code dentro do projeto e chame a skill com o caminho do relatório:
+
+```text
+cd code-smells-project
+claude
+> /refactor-arch ../reports/audit-project-1.md
+```
+
+Nos outros projetos, troque a pasta e o nome do relatório (`audit-project-2.md`, `audit-project-3.md`).
+
+1. As Fases 1 e 2 imprimem a análise, o inventário de endpoints e o relatório, e terminam com `Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]`.
+2. O relatório é gravado no caminho informado, qualquer que seja a resposta.
+3. Com `y`, a Fase 3 refatora, valida e imprime o resumo final. Com outra resposta, a skill para sem alterar o projeto.
+
+No modo de permissão padrão, o Claude Code pede autorização para os comandos que sobem e testam a aplicação. Para acompanhar sem interrupções, abra com `claude --permission-mode auto`.
+
+Este repositório já contém o código refatorado. Para repetir a execução sobre o código original, crie uma cópia do commit original e leve a skill para ela:
+
+```bash
+git worktree add ../projetos-originais 6d1ce62
+for p in code-smells-project ecommerce-api-legacy task-manager-api; do
+  cp -r "$p/.claude" "../projetos-originais/$p/"
+done
+```
+
+**Execução não interativa.** As execuções da seção C foram feitas assim, para acompanhar cada fase pelo log. A primeira chamada roda as Fases 1 e 2 e devolve um `session_id`; a segunda responde `y` na mesma sessão:
+
+```bash
+cd task-manager-api
+MSYS_NO_PATHCONV=1 claude -p "/refactor-arch ../reports/audit-project-3.md" \
+  --permission-mode auto --add-dir <raiz do repositório> --output-format json
+MSYS_NO_PATHCONV=1 claude -p "y" --resume <session_id> \
+  --permission-mode auto --add-dir <raiz do repositório> --output-format json
+```
+
+O `MSYS_NO_PATHCONV=1` só é necessário no Git Bash, para que `/refactor-arch` não vire um caminho do Windows. O `--add-dir` libera a gravação do relatório em `reports/`, fora da pasta do projeto.
+
+### Validando o resultado
+
+**Resumo da Fase 3.** O checklist de validação deve vir todo com ✓, e a tabela de endpoints deve mostrar só as mudanças listadas como intencionais.
+
+**Aplicação com o comando original.** Com o venv ativado nos projetos Python, suba a aplicação e chame um endpoint:
+
+| Projeto | Subir | Conferir |
+|---|---|---|
+| `code-smells-project` | `python app.py` | `curl http://127.0.0.1:5000/produtos` |
+| `ecommerce-api-legacy` | `npm start` | requisições do `api.http` |
+| `task-manager-api` | `python seed.py` e `python app.py` | `curl http://127.0.0.1:5000/tasks` |
+
+**Rotas administrativas.** Defina `ADMIN_TOKEN` no shell antes de subir e envie o mesmo valor no header `X-Admin-Token`. Sem o header, a resposta deve ser 401:
+
+```bash
+ADMIN_TOKEN=meu-token npm start
+curl -H "X-Admin-Token: meu-token" http://127.0.0.1:3000/api/admin/financial-report
+```
+
+No projeto 1, o token vale para `/admin/*`; no projeto 3, para cadastrar ou alterar usuários com papel diferente de `user`. As demais variáveis estão no `.env.example` de cada projeto. Nenhum deles carrega arquivo `.env`, então defina as variáveis no shell.
+
+**Comparação com o original.** `git diff 6d1ce62 -- <projeto>` mostra tudo o que a refatoração mudou, e o relatório em `reports/` explica cada mudança e o que ficou pendente.
