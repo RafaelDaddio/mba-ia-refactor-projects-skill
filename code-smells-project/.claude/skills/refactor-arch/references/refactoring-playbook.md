@@ -858,13 +858,14 @@ with conn:  # BEGIN … COMMIT, ou ROLLBACK se houver exceção
         raise AppError("Estoque insuficiente", status=400)
 ```
 
-Existência antes de alterar ou excluir, e regras de estado explícitas:
+Existência antes de alterar ou excluir, e unicidade verificada no service (vale também para bancos criados antes da constraint):
 
 ```python
 if self.orders.find_by_id(order_id) is None:
     raise AppError("Pedido não encontrado", status=404)
 
-ALLOWED_TRANSITIONS = {"pending": {"approved", "cancelled"}, "approved": {"shipped", "cancelled"}}
+if self.users.find_by_email(email) is not None:
+    raise AppError("E-mail já cadastrado", status=409)
 ```
 
 Schema para bancos novos:
@@ -895,7 +896,7 @@ const enrollment = await db.transaction(async () => {
 });
 ```
 
-**Cuidados:** `CREATE TABLE IF NOT EXISTS` não altera tabelas existentes; bancos antigos continuam com o schema antigo — avise no resumo. Ao ligar chaves estrangeiras, escolha a ação de exclusão compatível com o comportamento atual, para que exclusões que hoje funcionam continuem funcionando. Regras de transição só entram quando já estão declaradas no código (ex.: uma tabela de transições existente); caso contrário, ficam como recomendação (regra 4 do `SKILL.md`).
+**Cuidados:** `CREATE TABLE IF NOT EXISTS` não altera tabelas existentes; bancos antigos continuam com o schema antigo — avise no resumo e, para as regras que a constraint garantiria (unicidade, existência da referência), faça também a verificação no service. Ao ligar chaves estrangeiras, escolha a ação de exclusão compatível com o comportamento atual, para que exclusões que hoje funcionam continuem funcionando. Regras de transição só entram quando já estão declaradas no código (ex.: uma tabela de transições existente); caso contrário, ficam como recomendação (regra 4 do `SKILL.md`).
 
 ## PB13 — Substituir APIs deprecated
 

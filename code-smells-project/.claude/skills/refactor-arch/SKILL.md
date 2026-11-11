@@ -30,7 +30,11 @@ Valem durante toda a execução, inclusive depois da confirmação.
    - Devolver 4xx em vez de 500 para entrada inválida.
    - Padronizar o formato dos erros.
    - Corrigir comportamento errado dentro dos limites da regra 4.
-4. **Sem regras de negócio novas.** Corrija um comportamento só quando o erro tem evidência no próprio código (ex.: um log ou comentário que anuncia uma ação que o código não executa; uma validação aplicada na criação e esquecida na atualização) ou quando ele corrompe dados (estoque ou total negativo, referência a registro inexistente). Restrições que o código não expressa — como quais transições de status são permitidas — ficam como recomendação no resumo final.
+4. **Sem regras de negócio novas.** Corrija um comportamento só quando houver evidência de que ele está errado:
+   - **O próprio código já expressa a regra:** um log ou comentário que anuncia uma ação que não é executada; uma validação aplicada num ponto e esquecida em outro; um estado que o código distingue, mas que um cálculo ignora.
+   - **O comportamento corrompe dados ou identidade:** valor negativo ou zerado onde não faz sentido no domínio (estoque, total, quantidade de um item); referência a registro inexistente; duplicata de um campo usado como chave de busca (ex.: login por e-mail); associação repetida que gera efeito em dobro (ex.: a mesma compra cobrada duas vezes).
+
+   Restrições que o código não expressa — como quais transições de status são permitidas ou o formato de um campo — ficam como recomendação no resumo final.
 5. **Ignore o que não é código do projeto:** `.git/`, `.venv/`, `venv/`, `env/`, `node_modules/`, `__pycache__/`, `instance/`, `dist/`, `build/`, `.claude/`, `*.db`, `*.sqlite*`, `*.pyc` e lockfiles (estes só para ler versões).
 6. **Git pertence ao usuário.** Nunca execute `git add`, `commit`, `checkout`, `restore`, `stash`, `reset` ou `push`.
 7. **Sem dependências novas.** Não instale nem atualize pacotes sem perguntar. Use a biblioteca padrão e o que já está instalado. Dependências vulneráveis ficam como pendência no resumo final.
