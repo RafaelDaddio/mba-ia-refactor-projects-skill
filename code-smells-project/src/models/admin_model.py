@@ -1,31 +1,35 @@
+"""Operações administrativas sobre o banco inteiro."""
 import sqlite3
 
-# Ordem que respeita as referências entre as tabelas.
-TABELAS_PARA_RESET = ("itens_pedido", "pedidos", "produtos", "usuarios")
+# Ordem que respeita as chaves estrangeiras: filhos antes dos pais.
+_TABELAS_RESET = ("itens_pedido", "pedidos", "produtos", "usuarios")
 
 
-class SqlInvalido(Exception):
-    """O banco recusou o SQL recebido."""
+class ErroSql(Exception):
+    """O SQL informado pelo administrador foi recusado pelo banco."""
 
 
 class AdminModel:
-    def __init__(self, conexao):
-        self._conexao = conexao
+    def __init__(self, db):
+        self.db = db
 
-    def resetar(self):
-        conexao = self._conexao()
-        with conexao:
-            for tabela in TABELAS_PARA_RESET:
-                conexao.execute(f"DELETE FROM {tabela}")
+    def apagar_tudo(self):
+        with self.db.transaction() as conn:
+            for tabela in _TABELAS_RESET:
+                conn.execute(f"DELETE FROM {tabela}")
 
-    def executar_sql(self, sql):
-        """Executa o SQL recebido. SELECT devolve as linhas; o resto é gravado e devolve None."""
-        conexao = self._conexao()
+    def consultar(self, sql):
         try:
-            if sql.strip().upper().startswith("SELECT"):
-                return [dict(row) for row in conexao.execute(sql).fetchall()]
-            with conexao:
-                conexao.execute(sql)
-            return None
-        except sqlite3.Error as erro:
-            raise SqlInvalido(str(erro)) from erro
+            rows = self.db.conn.execute(sql).fetchall()
+        except (sqlite3.Error, sqlite3.Warning) as erro:
+            raise ErroSql(str(erro)) from erro
+        return [dict(row) for row in rows]
+
+    def executar(self, sql):
+        conn = self.db.conn
+        try:
+            conn.execute(sql)
+            conn.commit()
+        except (sqlite3.Error, sqlite3.Warning) as erro:
+            conn.rollback()
+            raise ErroSql(str(erro)) from erro

@@ -1,3 +1,4 @@
+"""Fluxo das requisições de relatórios."""
 from flask import jsonify
 
 

@@ -1,133 +1,82 @@
-PRODUTO_DESCONHECIDO = "Desconhecido"
+"""Acesso a dados de pedidos e seus itens."""
 
-
-class EstoqueInsuficiente(Exception):
-    """A baixa de estoque não encontrou unidades suficientes; a transação foi desfeita."""
-
-    def __init__(self, produto_id):
-        super().__init__(produto_id)
-        self.produto_id = produto_id
-
-
-def _pedido(row):
-    return {
-        "id": row["id"],
-        "usuario_id": row["usuario_id"],
-        "status": row["status"],
-        "total": row["total"],
-        "criado_em": row["criado_em"],
-    }
+PRODUTO_DESCONHECIDO = "Desconhecido"  # nome devolvido quando o produto do item foi excluído
 
 
 class PedidoModel:
-    def __init__(self, conexao):
-        self._conexao = conexao
+    def __init__(self, db):
+        self.db = db
 
-    def listar(self, limite, deslocamento, usuario_id=None):
-        """Pedidos com itens e nome do produto numa única consulta (sem N+1)."""
-        rows = self._conexao().execute(
-            """
-            WITH selecionados AS (
-                SELECT id, usuario_id, status, total, criado_em
-                FROM pedidos
-                WHERE (? IS NULL OR usuario_id = ?)
-                ORDER BY id
-                LIMIT ? OFFSET ?
-            )
-            SELECT s.id, s.usuario_id, s.status, s.total, s.criado_em,
-                   i.id AS item_id, i.produto_id, i.quantidade, i.preco_unitario,
-                   p.id AS produto_existe, p.nome AS produto_nome
-            FROM selecionados s
-            LEFT JOIN itens_pedido i ON i.pedido_id = s.id
-            LEFT JOIN produtos p ON p.id = i.produto_id
-            ORDER BY s.id, i.id
-            """,
-            (usuario_id, usuario_id, limite, deslocamento),
-        ).fetchall()
-
-        pedidos = {}
-        for row in rows:
-            pedido = pedidos.get(row["id"])
-            if pedido is None:
-                pedido = {**_pedido(row), "itens": []}
-                pedidos[row["id"]] = pedido
-            if row["item_id"] is not None:
-                pedido["itens"].append({
-                    "produto_id": row["produto_id"],
-                    "produto_nome": row["produto_nome"] if row["produto_existe"] is not None else PRODUTO_DESCONHECIDO,
-                    "quantidade": row["quantidade"],
-                    "preco_unitario": row["preco_unitario"],
-                })
-        return list(pedidos.values())
-
-    def buscar_por_id(self, pedido_id):
-        row = self._conexao().execute(
-            "SELECT id, usuario_id, status, total, criado_em FROM pedidos WHERE id = ?", (pedido_id,)
-        ).fetchone()
-        return _pedido(row) if row else None
-
-    def criar(self, usuario_id, status, total, itens):
-        """Grava pedido, itens e baixa de estoque numa transação.
-
-        `itens` é uma lista de (produto_id, quantidade, preco_unitario).
-        Lança EstoqueInsuficiente (com rollback) se alguma baixa deixaria o estoque negativo.
-        """
-        conexao = self._conexao()
-        with conexao:
-            pedido_id = conexao.execute(
+    def inserir(self, usuario_id, status, total):
+        with self.db.transaction() as conn:
+            cursor = conn.execute(
                 "INSERT INTO pedidos (usuario_id, status, total) VALUES (?, ?, ?)",
                 (usuario_id, status, total),
-            ).lastrowid
-            for produto_id, quantidade, preco_unitario in itens:
-                conexao.execute(
-                    "INSERT INTO itens_pedido (pedido_id, produto_id, quantidade, preco_unitario) VALUES (?, ?, ?, ?)",
-                    (pedido_id, produto_id, quantidade, preco_unitario),
-                )
-                baixa = conexao.execute(
-                    "UPDATE produtos SET estoque = estoque - ? WHERE id = ? AND estoque >= ?",
-                    (quantidade, produto_id, quantidade),
-                )
-                if baixa.rowcount == 0:
-                    raise EstoqueInsuficiente(produto_id)
-        return pedido_id
+            )
+            return cursor.lastrowid
+
+    def inserir_item(self, pedido_id, produto_id, quantidade, preco_unitario):
+        with self.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO itens_pedido (pedido_id, produto_id, quantidade, preco_unitario) VALUES (?, ?, ?, ?)",
+                (pedido_id, produto_id, quantidade, preco_unitario),
+            )
+
+    def buscar_por_id(self, pedido_id):
+        row = self.db.conn.execute(
+            "SELECT id, usuario_id, status, total, criado_em FROM pedidos WHERE id = ?", (pedido_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def quantidades_por_produto(self, pedido_id):
+        """Pares (produto_id, quantidade total) dos itens de um pedido."""
+        rows = self.db.conn.execute(
+            "SELECT produto_id, SUM(quantidade) AS quantidade FROM itens_pedido "
+            "WHERE pedido_id = ? GROUP BY produto_id ORDER BY produto_id",
+            (pedido_id,),
+        ).fetchall()
+        return [(row["produto_id"], row["quantidade"]) for row in rows]
+
+    def listar(self, limite, offset, usuario_id=None):
+        """Pedidos com itens em duas queries: a página de pedidos e os itens dela."""
+        conn = self.db.conn
+        where, params = ("WHERE usuario_id = ?", [usuario_id]) if usuario_id is not None else ("", [])
+        rows = conn.execute(
+            f"SELECT id, usuario_id, status, total, criado_em FROM pedidos {where} "
+            "ORDER BY id LIMIT ? OFFSET ?",
+            (*params, limite, offset),
+        ).fetchall()
+        pedidos = {row["id"]: {**dict(row), "itens": []} for row in rows}
+        if not pedidos:
+            return []
+
+        marcadores = ", ".join("?" * len(pedidos))
+        itens = conn.execute(
+            "SELECT i.pedido_id, i.produto_id, i.quantidade, i.preco_unitario, p.nome AS produto_nome "
+            "FROM itens_pedido i LEFT JOIN produtos p ON p.id = i.produto_id "
+            f"WHERE i.pedido_id IN ({marcadores}) ORDER BY i.id",
+            list(pedidos),
+        ).fetchall()
+        for item in itens:
+            pedidos[item["pedido_id"]]["itens"].append({
+                "produto_id": item["produto_id"],
+                "produto_nome": item["produto_nome"] or PRODUTO_DESCONHECIDO,
+                "quantidade": item["quantidade"],
+                "preco_unitario": item["preco_unitario"],
+            })
+        return list(pedidos.values())
 
     def atualizar_status(self, pedido_id, status):
-        conexao = self._conexao()
-        with conexao:
-            conexao.execute("UPDATE pedidos SET status = ? WHERE id = ?", (status, pedido_id))
-
-    def cancelar_devolvendo_estoque(self, pedido_id, status_cancelado):
-        """Muda o status para cancelado e devolve os itens ao estoque, uma única vez.
-
-        Devolve False (sem alterar nada) se o pedido já estava cancelado.
-        """
-        conexao = self._conexao()
-        with conexao:
-            mudou = conexao.execute(
-                "UPDATE pedidos SET status = ? WHERE id = ? AND (status IS NULL OR status <> ?)",
-                (status_cancelado, pedido_id, status_cancelado),
-            )
-            if mudou.rowcount == 0:
-                return False
-            conexao.execute(
-                """
-                UPDATE produtos
-                SET estoque = estoque + (
-                    SELECT SUM(i.quantidade) FROM itens_pedido i
-                    WHERE i.pedido_id = ? AND i.produto_id = produtos.id
-                )
-                WHERE id IN (SELECT produto_id FROM itens_pedido WHERE pedido_id = ?)
-                """,
-                (pedido_id, pedido_id),
-            )
-        return True
+        with self.db.transaction() as conn:
+            conn.execute("UPDATE pedidos SET status = ? WHERE id = ?", (status, pedido_id))
 
     def resumo_por_status(self):
-        rows = self._conexao().execute(
-            "SELECT status, COUNT(*) AS quantidade, COALESCE(SUM(total), 0) AS soma "
+        """Quantidade e soma dos totais por status, numa única agregação."""
+        rows = self.db.conn.execute(
+            "SELECT status, COUNT(*) AS quantidade, COALESCE(SUM(total), 0) AS total "
             "FROM pedidos GROUP BY status"
         ).fetchall()
-        return [dict(row) for row in rows]
+        return {row["status"]: {"quantidade": row["quantidade"], "total": row["total"]} for row in rows}
 
     def contar(self):
-        return self._conexao().execute("SELECT COUNT(*) FROM pedidos").fetchone()[0]
+        return self.db.conn.execute("SELECT COUNT(*) FROM pedidos").fetchone()[0]

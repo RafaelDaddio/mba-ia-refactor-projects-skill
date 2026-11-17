@@ -1,44 +1,52 @@
+"""Regras de negócio de usuários: cadastro, autenticação e dados públicos da conta."""
 import logging
 
-from werkzeug.security import check_password_hash, generate_password_hash
-
 from src.utils.errors import AppError
+from src.utils.senhas import conferir, gerar_hash
 
 logger = logging.getLogger(__name__)
 
-TIPO_PADRAO = "cliente"
+TIPO_ADMIN = "admin"
+TIPO_CLIENTE = "cliente"
+
+_CAMPOS_PUBLICOS = ("id", "nome", "email", "tipo", "criado_em")
+_CAMPOS_LOGIN = ("id", "nome", "email", "tipo")
+
+
+def _publico(usuario, campos=_CAMPOS_PUBLICOS):
+    """Serialização única da conta: a senha (hash) nunca sai daqui."""
+    return {campo: usuario[campo] for campo in campos}
 
 
 class UsuarioService:
     def __init__(self, usuarios):
         self.usuarios = usuarios
 
-    def listar(self, limite, deslocamento):
-        return self.usuarios.listar(limite, deslocamento)
+    def listar(self, limite, offset):
+        return [_publico(usuario) for usuario in self.usuarios.listar(limite, offset)]
 
     def obter(self, usuario_id):
         usuario = self.usuarios.buscar_por_id(usuario_id)
         if usuario is None:
             raise AppError("Usuário não encontrado", status=404)
-        return usuario
+        return _publico(usuario)
 
     def criar(self, nome, email, senha):
-        # O login busca pelo e-mail: duplicatas tornariam a identidade ambígua.
-        if self.usuarios.email_cadastrado(email):
-            raise AppError("Email já cadastrado", status=409)
-        usuario_id = self.usuarios.criar(nome, email, generate_password_hash(senha), TIPO_PADRAO)
-        logger.info("Usuário criado com ID %s", usuario_id)
+        # O e-mail é a chave de busca do login: não pode se repetir.
+        if self.usuarios.buscar_por_email(email) is not None:
+            raise AppError("E-mail já cadastrado", status=409)
+        usuario_id = self.usuarios.inserir(nome, email, gerar_hash(senha), TIPO_CLIENTE)
+        logger.info("Usuário criado: %s", usuario_id)
         return usuario_id
 
     def autenticar(self, email, senha):
-        for registro in self.usuarios.listar_credenciais_por_email(email):
-            if check_password_hash(registro["senha"] or "", senha):
-                logger.info("Login bem-sucedido do usuário %s", registro["id"])
-                return {
-                    "id": registro["id"],
-                    "nome": registro["nome"],
-                    "email": registro["email"],
-                    "tipo": registro["tipo"],
-                }
-        logger.info("Tentativa de login recusada")
-        raise AppError("Email ou senha inválidos", status=401)
+        usuario = self.usuarios.buscar_por_email(email)
+        if usuario is None or not conferir(usuario["senha"], senha):
+            logger.info("Login falhou")
+            raise AppError("Email ou senha inválidos", status=401)
+        logger.info("Login bem-sucedido: usuário %s", usuario["id"])
+        return _publico(usuario, _CAMPOS_LOGIN)
+
+    @staticmethod
+    def eh_admin(usuario):
+        return usuario["tipo"] == TIPO_ADMIN

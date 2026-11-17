@@ -1,53 +1,39 @@
-def _usuario_publico(row):
-    """Serialização única de usuário: a senha nunca sai do model."""
-    return {
-        "id": row["id"],
-        "nome": row["nome"],
-        "email": row["email"],
-        "tipo": row["tipo"],
-        "criado_em": row["criado_em"],
-    }
+"""Acesso a dados de usuários. O campo `senha` guarda o hash e não sai da camada de serviço."""
+
+_CAMPOS = ("id", "nome", "email", "senha", "tipo", "criado_em")
+
+
+def _para_dict(row):
+    return {campo: row[campo] for campo in _CAMPOS}
 
 
 class UsuarioModel:
-    def __init__(self, conexao):
-        self._conexao = conexao
+    def __init__(self, db):
+        self.db = db
 
-    def listar(self, limite, deslocamento):
-        rows = self._conexao().execute(
-            "SELECT id, nome, email, tipo, criado_em FROM usuarios ORDER BY id LIMIT ? OFFSET ?",
-            (limite, deslocamento),
+    def listar(self, limite, offset):
+        rows = self.db.conn.execute(
+            "SELECT * FROM usuarios ORDER BY id LIMIT ? OFFSET ?", (limite, offset)
         ).fetchall()
-        return [_usuario_publico(row) for row in rows]
+        return [_para_dict(row) for row in rows]
 
     def buscar_por_id(self, usuario_id):
-        row = self._conexao().execute(
-            "SELECT id, nome, email, tipo, criado_em FROM usuarios WHERE id = ?", (usuario_id,)
+        row = self.db.conn.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
+        return _para_dict(row) if row else None
+
+    def buscar_por_email(self, email):
+        row = self.db.conn.execute(
+            "SELECT * FROM usuarios WHERE email = ? ORDER BY id LIMIT 1", (email,)
         ).fetchone()
-        return _usuario_publico(row) if row else None
+        return _para_dict(row) if row else None
 
-    def listar_credenciais_por_email(self, email):
-        """Registros com o hash da senha, para uso exclusivo da autenticação."""
-        rows = self._conexao().execute(
-            "SELECT id, nome, email, tipo, senha FROM usuarios WHERE email = ? ORDER BY id",
-            (email,),
-        ).fetchall()
-        return [dict(row) for row in rows]
-
-    def email_cadastrado(self, email):
-        row = self._conexao().execute(
-            "SELECT 1 FROM usuarios WHERE email = ? LIMIT 1", (email,)
-        ).fetchone()
-        return row is not None
-
-    def criar(self, nome, email, senha_hash, tipo):
-        conexao = self._conexao()
-        with conexao:
-            cursor = conexao.execute(
+    def inserir(self, nome, email, senha_hash, tipo):
+        with self.db.transaction() as conn:
+            cursor = conn.execute(
                 "INSERT INTO usuarios (nome, email, senha, tipo) VALUES (?, ?, ?, ?)",
                 (nome, email, senha_hash, tipo),
             )
-        return cursor.lastrowid
+            return cursor.lastrowid
 
     def contar(self):
-        return self._conexao().execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
+        return self.db.conn.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]

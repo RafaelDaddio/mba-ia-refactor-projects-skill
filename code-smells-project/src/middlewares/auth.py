@@ -1,37 +1,77 @@
+"""Autenticação e níveis de acesso: pública, conta autenticada, dono da conta e administrador."""
 import hmac
 from functools import wraps
 
-from flask import current_app, request
+from flask import request
+from itsdangerous import BadData, URLSafeTimedSerializer
 
 from src.utils.errors import AppError
 
-HEADER_TOKEN_ADMIN = "X-Admin-Token"
+VALIDADE_TOKEN = 8 * 3600  # segundos
+_PREFIXO = "Bearer "
 
 
-def exigir_admin(view):
-    """Exige o header X-Admin-Token igual a ADMIN_TOKEN. Sem ADMIN_TOKEN configurado, nega sempre."""
+class Auth:
+    def __init__(self, secret_key, admin_token=None):
+        self._serializer = URLSafeTimedSerializer(secret_key, salt="auth-token")
+        self._admin_token = (admin_token or "").encode()
 
-    @wraps(view)
-    def wrapper(*args, **kwargs):
-        esperado = (current_app.config.get("ADMIN_TOKEN") or "").encode()
-        informado = (request.headers.get(HEADER_TOKEN_ADMIN) or "").encode()
-        if not esperado or not hmac.compare_digest(informado, esperado):
-            raise AppError("Acesso administrativo negado", status=401)
-        return view(*args, **kwargs)
+    def issue_token(self, usuario_id, is_admin=False):
+        """Token assinado com o id e o papel da conta; o papel vale até o token expirar."""
+        return self._serializer.dumps({"uid": usuario_id, "adm": bool(is_admin)})
 
-    return wrapper
+    def _claims(self):
+        """Conteúdo do token Bearer; None se ausente, adulterado ou expirado."""
+        header = request.headers.get("Authorization", "")
+        if not header.startswith(_PREFIXO):
+            return None
+        try:
+            claims = self._serializer.loads(header[len(_PREFIXO):], max_age=VALIDADE_TOKEN)
+        except BadData:
+            return None
+        return claims if isinstance(claims, dict) and "uid" in claims else None
 
+    def _admin_token_ok(self):
+        informado = request.headers.get("X-Admin-Token", "").encode()
+        return bool(self._admin_token) and hmac.compare_digest(informado, self._admin_token)
 
-def exigir_recurso_habilitado(chave_config):
-    """Bloqueia (403) o endpoint enquanto a flag de configuração estiver desligada."""
+    def is_admin(self):
+        claims = self._claims()
+        return self._admin_token_ok() or bool(claims and claims.get("adm"))
 
-    def decorador(view):
+    def require_user(self):
+        """Nível "conta autenticada". Devolve o id da conta (None para o token administrativo)."""
+        if self._admin_token_ok():
+            return None
+        claims = self._claims()
+        if claims is None:
+            raise AppError("Autenticação necessária", status=401)
+        return claims["uid"]
+
+    def require_account_owner(self, usuario_id):
+        """Nível "dono da conta ou administrador"."""
+        if self.is_admin():
+            return
+        if self.require_user() != usuario_id:
+            raise AppError("Acesso negado a esta conta", status=403)
+
+    def require_admin(self):
+        """Nível "administrador"."""
+        if self.is_admin():
+            return
+        self.require_user()  # 401 sem credencial
+        raise AppError("Acesso restrito a administradores", status=403)
+
+    def user_only(self, view):
         @wraps(view)
         def wrapper(*args, **kwargs):
-            if not current_app.config.get(chave_config):
-                raise AppError("Endpoint desabilitado", status=403)
+            self.require_user()
             return view(*args, **kwargs)
-
         return wrapper
 
-    return decorador
+    def admin_only(self, view):
+        @wraps(view)
+        def wrapper(*args, **kwargs):
+            self.require_admin()
+            return view(*args, **kwargs)
+        return wrapper
