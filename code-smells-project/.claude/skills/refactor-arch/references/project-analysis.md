@@ -96,7 +96,7 @@ Para cada endpoint, registre:
 - método e caminho completo (com prefixos);
 - handler (`arquivo:linha`);
 - campos de entrada: chaves lidas do corpo (`request.get_json()`, `dados["x"]`, `data.get("x")`, `req.body.x`), da query string (`request.args.get`, `req.query`) e parâmetros de caminho;
-- se é administrativo pela definição da regra 3 do `SKILL.md`.
+- se é administrativo ou de identidade pelas definições da regra 3 do `SKILL.md`.
 
 Procure também exemplos de requisição: `*.http`, `*.rest`, coleções Postman e comandos `curl` no README. Eles são a melhor fonte de payloads válidos para a Fase 3.
 

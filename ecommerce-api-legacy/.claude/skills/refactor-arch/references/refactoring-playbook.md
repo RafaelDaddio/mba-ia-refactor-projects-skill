@@ -21,7 +21,7 @@ Faça a checagem estática e uma subida rápida da aplicação ao fim das etapas
 | PB03 | Hash de senha com biblioteca já disponível | AP03 |
 | PB04 | Dados sensíveis fora de respostas e logs | AP04 |
 | PB05 | Decompor God Class/Module por domínio e camada | AP05, AP14, AP24, AP28 |
-| PB06 | Proteger endpoints administrativos | AP06, AP10 |
+| PB06 | Proteger rotas administrativas e a identidade das contas | AP06, AP10 |
 | PB07 | Extrair regras de negócio para services | AP07, AP14 |
 | PB08 | App factory, injeção de dependência e conexão por requisição | AP08, AP09, AP19 |
 | PB09 | Tratamento de erros centralizado | AP12, AP16, AP25 |
@@ -354,9 +354,13 @@ function buildProductRoutes({ productController }) {
 
 **Cuidados:** os caminhos, métodos e chaves das respostas continuam idênticos (o JSON acima é ilustrativo). Serialização repetida vira uma única função por entidade. Rotas que estavam no módulo de outro recurso vão para o módulo do próprio recurso, com o mesmo caminho. Ao terminar, apague os módulos antigos.
 
-## PB06 — Proteger endpoints administrativos
+## PB06 — Proteger rotas administrativas e a identidade das contas
 
 **Resolve:** AP06, AP10.
+
+As duas proteções seguem as definições da regra 3 do `SKILL.md`: rotas administrativas exigem o token administrativo; operações de identidade exigem a prova de que quem pede é o dono da conta.
+
+### Rotas administrativas
 
 Python:
 
@@ -370,12 +374,16 @@ from flask import current_app, request
 from src.utils.errors import AppError
 
 
+def is_admin_request():
+    expected = (current_app.config.get("ADMIN_TOKEN") or "").encode()
+    provided = request.headers.get("X-Admin-Token", "").encode()
+    return bool(expected) and hmac.compare_digest(provided, expected)
+
+
 def require_admin(view):
     @wraps(view)
     def wrapper(*args, **kwargs):
-        expected = (current_app.config.get("ADMIN_TOKEN") or "").encode()
-        provided = request.headers.get("X-Admin-Token", "").encode()
-        if not expected or not hmac.compare_digest(provided, expected):
+        if not is_admin_request():
             raise AppError("Acesso administrativo negado", status=401)
         return view(*args, **kwargs)
     return wrapper
@@ -396,25 +404,144 @@ def run_query():
 Node:
 
 ```js
-// src/middlewares/adminAuth.js
+// src/middlewares/auth.js
 const crypto = require('crypto');
 const { AppError } = require('../utils/errors');
 
+function safeEqual(a, b) {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function isAdmin(req, adminToken) {
+  return Boolean(adminToken) && safeEqual(req.get('X-Admin-Token') || '', adminToken);
+}
+
 function adminAuth(adminToken) {
-  return (req, res, next) => {
-    const provided = Buffer.from(req.get('X-Admin-Token') || '');
-    const expected = Buffer.from(adminToken || '');
-    const ok = Boolean(adminToken)
-      && provided.length === expected.length
-      && crypto.timingSafeEqual(provided, expected);
-    return ok ? next() : next(new AppError('Acesso administrativo negado', 401));
-  };
+  return (req, res, next) => (isAdmin(req, adminToken)
+    ? next()
+    : next(new AppError('Acesso administrativo negado', 401)));
 }
 
 // uso: router.post('/admin/reset', adminAuth(config.adminToken), asyncHandler(adminController.reset));
 ```
 
-**Cuidados:** aplique só às rotas administrativas da regra 3 do `SKILL.md`. O caminho e o método continuam os mesmos; sem o header, a resposta passa a ser 401 (ou 403 para recurso desabilitado) — mudança intencional. Não adicione autenticação obrigatória às rotas públicas: registre essa ausência como pendência. Impeça que o cliente defina o próprio papel administrativo (campo `role`/`tipo` ignorado ou restrito a administradores) e liste a mudança.
+### Identidade das contas
+
+O login que o projeto já tem passa a emitir um token assinado com um segredo da configuração. As operações de identidade aceitam o token do dono da conta ou o token administrativo.
+
+Python (o `itsdangerous` já vem com o Flask; o segredo é a `SECRET_KEY`):
+
+```python
+# src/middlewares/auth.py (continuação)
+from itsdangerous import BadSignature, URLSafeTimedSerializer
+
+TOKEN_MAX_AGE = 8 * 3600  # segundos
+
+
+def _serializer():
+    return URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="auth-token")
+
+
+def issue_token(user_id):
+    return _serializer().dumps({"uid": user_id})
+
+
+def authenticated_user_id():
+    """Id do dono do token Bearer; None se ausente, adulterado ou expirado."""
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return None
+    try:
+        return _serializer().loads(header[len("Bearer "):], max_age=TOKEN_MAX_AGE)["uid"]
+    except (BadSignature, KeyError, TypeError):
+        return None
+
+
+def require_account_owner(user_id):
+    """Libera o dono da conta ou o token administrativo; senão, 401 ou 403."""
+    if is_admin_request():
+        return
+    current = authenticated_user_id()
+    if current is None:
+        raise AppError("Autenticação necessária", status=401)
+    if current != user_id:
+        raise AppError("Acesso negado a esta conta", status=403)
+
+
+# controllers
+def login():
+    user = auth_service.authenticate(email, password)  # mesmas validações e mensagens
+    # mesmas chaves de antes; o token entra no campo que já existia ou numa chave nova
+    return jsonify({"message": "Login OK", "user": serialize_user(user), "token": issue_token(user.id)}), 200
+
+
+def update_user(user_id):
+    require_account_owner(user_id)  # alterar ou excluir conta
+    ...
+
+
+def create_order():
+    data = require_object(request.get_json())
+    require_account_owner(parse_id(data.get("user_id")))  # agir em nome da conta informada
+    ...
+```
+
+Node (o segredo é o `sessionSecret` da configuração, PB02):
+
+```js
+// src/middlewares/auth.js (continuação)
+const TOKEN_TTL_MS = 8 * 3600 * 1000;
+const sign = (payload, secret) => crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+
+function issueToken(userId, secret) {
+  const payload = Buffer.from(JSON.stringify({ uid: userId, exp: Date.now() + TOKEN_TTL_MS })).toString('base64url');
+  return `${payload}.${sign(payload, secret)}`;
+}
+
+function verifyToken(token, secret) {
+  const [payload = '', signature = ''] = String(token).split('.');
+  if (!payload || !safeEqual(signature, sign(payload, secret))) return null;
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return data.exp > Date.now() ? data.uid : null;
+  } catch {
+    return null;
+  }
+}
+
+// libera o dono da conta ou o token administrativo; getUserId diz de qual conta é a operação
+function requireAccountOwner({ sessionSecret, adminToken }, getUserId = (req) => Number(req.params.id)) {
+  return (req, res, next) => {
+    if (isAdmin(req, adminToken)) return next();
+    const header = req.get('Authorization') || '';
+    const uid = header.startsWith('Bearer ') ? verifyToken(header.slice(7), sessionSecret) : null;
+    if (uid === null) return next(new AppError('Autenticação necessária', 401));
+    return uid === getUserId(req) ? next() : next(new AppError('Acesso negado a esta conta', 403));
+  };
+}
+
+// uso: router.delete('/users/:id', requireAccountOwner(config), asyncHandler(userController.remove));
+```
+
+Quando a rota já recebe a senha da conta, a prova é a senha conferida, sem exigir token:
+
+```js
+// service: a conta existente só é usada com a senha correta
+const existing = await users.findByEmail(email);
+if (existing && !(await verifyPassword(password, existing.passwordHash))) {
+  throw new AppError('Credenciais inválidas', 401);
+}
+```
+
+**Cuidados:**
+- **Escopo.** O token administrativo vale só para as rotas administrativas da regra 3; a prova de identidade, só para as operações de identidade. Não adicione autenticação às rotas comuns que não envolvem contas: registre essa ausência como pendência.
+- **Contrato.** Caminhos, métodos e campos de entrada continuam os mesmos. O login mantém as chaves e ganha o token. Sem login no projeto, as operações de identidade aceitam só o token administrativo; não crie rotas novas. Sem credencial, 401; com o token de outra conta, 403; recurso desabilitado, 403. Tudo isso é mudança intencional, listada no resumo final.
+- **Ordem.** Verifique a prova antes de validar o corpo ou consultar o banco, para não revelar se uma conta existe.
+- **Segredo.** O segredo de assinatura vem da configuração, sem valor fixo no código. Se faltar, o valor aleatório gerado na inicialização invalida os tokens a cada reinício; registre isso no aviso de inicialização e no resumo final.
+- **Papel.** Impeça que o cliente defina o próprio papel: o campo `role`/`tipo` é ignorado ou exige o token administrativo, inclusive para o dono da conta.
+- **Exemplos.** Documente as variáveis no `.env.example` e atualize os exemplos de requisição que o projeto já tem (`*.http`, README) para enviar a credencial.
 
 ## PB07 — Extrair regras de negócio para services
 

@@ -50,7 +50,8 @@ Monte uma lista ordenada com pelo menos uma requisição por endpoint do invent�
 2. **Ordem:** leituras → criações → atualizações → exclusões de recursos criados pelo próprio plano → endpoints destrutivos globais (ex.: reset do banco) por último.
 3. **Entradas válidas apenas.** O plano verifica funcionamento, não explora falhas. Para cada correção de validação, acrescente no fim **um** caso inválido que antes gerava 500, para mostrar o 4xx.
 4. **Rotas administrativas:** na versão refatorada, chame sem credencial (espera-se 401/403) e com o token configurado na subida (espera-se o comportamento original). Endpoints desligados por padrão devem responder 403.
-5. **Pré-requisitos:** rode antes de subir o que o README exige (ex.: `python seed.py`).
+5. **Operações de identidade** (regra 3): na versão refatorada, obtenha o token pelo login com as credenciais do seed e chame cada operação sem credencial (401), com o token de outra conta (403), com o token do dono e com o token administrativo (os dois com o comportamento original). Onde a prova é a senha da conta, chame com a senha errada (401) e com a certa (comportamento original). Confirme que o login mantém as chaves de antes.
+6. **Pré-requisitos:** rode antes de subir o que o README exige (ex.: `python seed.py`).
 
 Registre por requisição: método, caminho, status, content-type e as chaves de primeiro nível do JSON (ou o tipo do corpo).
 
@@ -83,7 +84,7 @@ Corrija antes de seguir para a próxima etapa.
 | Situação | Resultado |
 |---|---|
 | Mesmo status e mesmas chaves de primeiro nível | ✓ |
-| Diferença listada como mudança intencional e permitida pelas regras 3 e 4 do `SKILL.md` (dado sensível removido, rota administrativa protegida, 500 → 4xx para entrada inválida, formato de erro padronizado, erro com evidência no código corrigido) | ✓ com nota |
+| Diferença listada como mudança intencional e permitida pelas regras 3 e 4 do `SKILL.md` (dado sensível removido, rota administrativa protegida, operação de identidade protegida, 500 → 4xx para entrada inválida, formato de erro padronizado, erro com evidência no código corrigido) | ✓ com nota |
 | Qualquer outra diferença | ✗ — corrigir e validar de novo |
 
 7. Pare tudo, rode `free_port` e apague os arquivos de dados criados pela validação.

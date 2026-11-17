@@ -122,7 +122,8 @@ SQL montado juntando strings com valores vindos de fora.
 ### AP10 — Autenticação ausente ou de fachada
 
 - **Sinais:** login que não emite token nem sessão, ou que emite token previsível (`'token-' + id`) que nenhuma rota verifica; nenhuma rota exige identidade; rotas comuns que expõem ou alteram dados de outros usuários sem identificar quem pede (listagem geral, relatório fora de `/admin`, exclusão de recurso de terceiros); o cliente define o próprio `role`/`tipo`/`is_admin` no cadastro ou na atualização.
-- **Correção:** PB06 só para as rotas administrativas da regra 3 do `SKILL.md` e para impedir que o cliente defina o próprio papel. Nas demais rotas, autenticação fica como recomendação e o finding fica pendente, porque mudaria o contrato.
+- **Separar em findings:** (1) identidade das contas desprotegida — login sem credencial ou com token de fachada, conta alterada ou excluída por quem não é o dono, ação em nome de outra conta, papel definido pelo próprio cliente; (2) rotas comuns sem autenticação que não envolvem identidade (catálogo, listagens gerais, relatórios fora de `/admin`).
+- **Correção:** PB06. O finding de identidade é corrigido: o login emite token assinado e as operações de identidade da regra 3 do `SKILL.md` exigem o token do dono, o token administrativo ou a senha conferida. No finding de rotas comuns, autenticação fica como recomendação e pendência, porque mudaria o contrato.
 
 ### AP11 — Debug ligado e servidor exposto no entry point
 
