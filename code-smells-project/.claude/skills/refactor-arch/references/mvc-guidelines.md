@@ -11,7 +11,7 @@ Em uma API, o MVC fica assim: **Model** guarda o acesso aos dados, **View** é a
 | **Model** | Acesso a dados de um domínio: queries parametrizadas ou ORM, mapeamento de registro para estrutura de dados, transações de escrita. | Regras de negócio, validação de entrada, uso de objetos HTTP. |
 | **Service** | Regras de negócio: cálculos, transições de estado, invariantes, orquestração de vários models, efeitos colaterais (notificações, auditoria). Lança erros de domínio. | Acesso direto ao banco, uso de objetos HTTP, formatação de resposta. |
 | **Controller** | Lê a requisição, valida a entrada, chama o service, escolhe o status e monta a resposta. | Acesso ao banco, regras de negócio. |
-| **View (routes)** | Mapeia URL e método para o controller e aplica middlewares por rota (ex.: token administrativo, dono da conta). | Lógica de qualquer tipo. |
+| **View (routes)** | Mapeia URL e método para o controller e aplica middlewares por rota (ex.: nível de acesso). | Lógica de qualquer tipo. |
 | **Config** | Lê variáveis de ambiente e expõe as configurações tipadas. | Ser lida diretamente pelas camadas internas (a configuração é injetada). |
 | **Middlewares** | Tratamento de erros centralizado, autenticação (token administrativo e token de usuário), CORS, logging de requisição. | Regras de negócio. |
 | **Composition root** | Cria a aplicação, lê a configuração, abre o banco, instancia models, services e controllers com suas dependências, registra rotas e middlewares. | Regras de negócio ou acesso ao banco fora da inicialização. |
@@ -88,7 +88,7 @@ Regras do layout:
 - Uma classe de erro de aplicação (mensagem + status HTTP) lançada por services e controllers.
 - Um handler central, registrado no mecanismo de erros do framework, que converte esse erro, os erros HTTP do próprio framework e as exceções inesperadas no formato padrão do projeto.
 - Exceções inesperadas: log com stack trace no servidor e resposta 500 genérica, sem detalhes internos.
-- Entrada inválida responde 400; recurso inexistente, 404; sem credencial, 401; credencial de outra conta ou recurso desabilitado, 403.
+- Entrada inválida responde 400; recurso inexistente, 404; sem credencial, 401; credencial insuficiente (outra conta, papel sem permissão) ou recurso desabilitado, 403.
 - Em código assíncrono, todo erro (rejeição de promessa, erro de callback) precisa chegar ao handler central. Nenhum erro pode escapar do ciclo da requisição e derrubar o processo.
 
 ## 8. Checklist de conformidade

@@ -21,7 +21,7 @@ Faça a checagem estática e uma subida rápida da aplicação ao fim das etapas
 | PB03 | Hash de senha com biblioteca já disponível | AP03 |
 | PB04 | Dados sensíveis fora de respostas e logs | AP04 |
 | PB05 | Decompor God Class/Module por domínio e camada | AP05, AP14, AP24, AP28 |
-| PB06 | Proteger rotas administrativas e a identidade das contas | AP06, AP10 |
+| PB06 | Autenticação e níveis de acesso | AP06, AP10 |
 | PB07 | Extrair regras de negócio para services | AP07, AP14 |
 | PB08 | App factory, injeção de dependência e conexão por requisição | AP08, AP09, AP19 |
 | PB09 | Tratamento de erros centralizado | AP12, AP16, AP25 |
@@ -354,15 +354,13 @@ function buildProductRoutes({ productController }) {
 
 **Cuidados:** os caminhos, métodos e chaves das respostas continuam idênticos (o JSON acima é ilustrativo). Serialização repetida vira uma única função por entidade. Rotas que estavam no módulo de outro recurso vão para o módulo do próprio recurso, com o mesmo caminho. Ao terminar, apague os módulos antigos.
 
-## PB06 — Proteger rotas administrativas e a identidade das contas
+## PB06 — Autenticação e níveis de acesso
 
 **Resolve:** AP06, AP10.
 
-As duas proteções seguem as definições da regra 3 do `SKILL.md`: rotas administrativas exigem o token administrativo; operações de identidade exigem a prova de que quem pede é o dono da conta.
+O login que o projeto já tem passa a emitir um token assinado, e cada rota exige a credencial do seu nível de acesso pela regra 3 do `SKILL.md`: pública, conta autenticada, dono da conta ou administrador. O token carrega o id e o papel da conta, para que o middleware decida sem consultar o banco.
 
-### Rotas administrativas
-
-Python:
+Python (o `itsdangerous` já vem com o Flask; o segredo é a `SECRET_KEY`):
 
 ```python
 # src/middlewares/auth.py
@@ -370,72 +368,9 @@ import hmac
 from functools import wraps
 
 from flask import current_app, request
+from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from src.utils.errors import AppError
-
-
-def is_admin_request():
-    expected = (current_app.config.get("ADMIN_TOKEN") or "").encode()
-    provided = request.headers.get("X-Admin-Token", "").encode()
-    return bool(expected) and hmac.compare_digest(provided, expected)
-
-
-def require_admin(view):
-    @wraps(view)
-    def wrapper(*args, **kwargs):
-        if not is_admin_request():
-            raise AppError("Acesso administrativo negado", status=401)
-        return view(*args, **kwargs)
-    return wrapper
-
-
-# src/routes/admin_routes.py — mesmo caminho, agora protegido
-bp.add_url_rule("/admin/reset-db", view_func=require_admin(admin_controller.reset_db), methods=["POST"])
-
-
-# endpoints que executam SQL ou código recebido ficam desligados por padrão
-@require_admin
-def run_query():
-    if not current_app.config.get("ALLOW_ADMIN_SQL"):
-        raise AppError("Endpoint desabilitado", status=403)
-    ...
-```
-
-Node:
-
-```js
-// src/middlewares/auth.js
-const crypto = require('crypto');
-const { AppError } = require('../utils/errors');
-
-function safeEqual(a, b) {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && crypto.timingSafeEqual(left, right);
-}
-
-function isAdmin(req, adminToken) {
-  return Boolean(adminToken) && safeEqual(req.get('X-Admin-Token') || '', adminToken);
-}
-
-function adminAuth(adminToken) {
-  return (req, res, next) => (isAdmin(req, adminToken)
-    ? next()
-    : next(new AppError('Acesso administrativo negado', 401)));
-}
-
-// uso: router.post('/admin/reset', adminAuth(config.adminToken), asyncHandler(adminController.reset));
-```
-
-### Identidade das contas
-
-O login que o projeto já tem passa a emitir um token assinado com um segredo da configuração. As operações de identidade aceitam o token do dono da conta ou o token administrativo.
-
-Python (o `itsdangerous` já vem com o Flask; o segredo é a `SECRET_KEY`):
-
-```python
-# src/middlewares/auth.py (continuação)
-from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 TOKEN_MAX_AGE = 8 * 3600  # segundos
 
@@ -444,41 +379,93 @@ def _serializer():
     return URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="auth-token")
 
 
-def issue_token(user_id):
-    return _serializer().dumps({"uid": user_id})
+def issue_token(user_id, is_admin=False):
+    return _serializer().dumps({"uid": user_id, "adm": bool(is_admin)})
 
 
-def authenticated_user_id():
-    """Id do dono do token Bearer; None se ausente, adulterado ou expirado."""
+def _claims():
+    """Conteúdo do token Bearer; None se ausente, adulterado ou expirado."""
     header = request.headers.get("Authorization", "")
     if not header.startswith("Bearer "):
         return None
     try:
-        return _serializer().loads(header[len("Bearer "):], max_age=TOKEN_MAX_AGE)["uid"]
-    except (BadSignature, KeyError, TypeError):
+        claims = _serializer().loads(header[len("Bearer "):], max_age=TOKEN_MAX_AGE)
+    except BadSignature:
         return None
+    return claims if isinstance(claims, dict) and "uid" in claims else None
+
+
+def _admin_token_ok():
+    expected = (current_app.config.get("ADMIN_TOKEN") or "").encode()
+    provided = request.headers.get("X-Admin-Token", "").encode()
+    return bool(expected) and hmac.compare_digest(provided, expected)
+
+
+def is_admin():
+    claims = _claims()
+    return _admin_token_ok() or bool(claims and claims.get("adm"))
+
+
+def require_user():
+    """Nível "conta autenticada". Devolve o id da conta (None para o token administrativo)."""
+    if _admin_token_ok():
+        return None
+    claims = _claims()
+    if claims is None:
+        raise AppError("Autenticação necessária", status=401)
+    return claims["uid"]
 
 
 def require_account_owner(user_id):
-    """Libera o dono da conta ou o token administrativo; senão, 401 ou 403."""
-    if is_admin_request():
+    """Nível "dono da conta ou administrador"."""
+    if is_admin():
         return
-    current = authenticated_user_id()
-    if current is None:
-        raise AppError("Autenticação necessária", status=401)
-    if current != user_id:
+    if require_user() != user_id:
         raise AppError("Acesso negado a esta conta", status=403)
 
 
-# controllers
+def require_admin():
+    """Nível "administrador"."""
+    if is_admin():
+        return
+    require_user()  # 401 sem credencial
+    raise AppError("Acesso restrito a administradores", status=403)
+
+
+def admin_only(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        require_admin()
+        return view(*args, **kwargs)
+    return wrapper
+
+
+def user_only(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        require_user()
+        return view(*args, **kwargs)
+    return wrapper
+```
+
+```python
+# routes — mesmo caminho e método; o nível vem do inventário da Fase 1
+bp.add_url_rule("/products", view_func=product_controller.list_products, methods=["GET"])            # pública
+bp.add_url_rule("/products", view_func=user_only(product_controller.create), methods=["POST"])       # conta autenticada
+bp.add_url_rule("/users", view_func=admin_only(user_controller.list_users), methods=["GET"])         # dados de todas as contas
+bp.add_url_rule("/admin/reset-db", view_func=admin_only(admin_controller.reset_db), methods=["POST"])
+
+
+# controllers — nível "dono" quando a conta vem do caminho ou do corpo
 def login():
     user = auth_service.authenticate(email, password)  # mesmas validações e mensagens
     # mesmas chaves de antes; o token entra no campo que já existia ou numa chave nova
-    return jsonify({"message": "Login OK", "user": serialize_user(user), "token": issue_token(user.id)}), 200
+    return jsonify({"message": "Login OK", "user": serialize_user(user),
+                    "token": issue_token(user.id, user.role == "admin")}), 200
 
 
 def update_user(user_id):
-    require_account_owner(user_id)  # alterar ou excluir conta
+    require_account_owner(user_id)
     ...
 
 
@@ -486,17 +473,35 @@ def create_order():
     data = require_object(request.get_json())
     require_account_owner(parse_id(data.get("user_id")))  # agir em nome da conta informada
     ...
+
+
+# endpoints que executam SQL ou código recebido ficam desligados por padrão
+@admin_only
+def run_query():
+    if not current_app.config.get("ALLOW_ADMIN_SQL"):
+        raise AppError("Endpoint desabilitado", status=403)
+    ...
 ```
 
 Node (o segredo é o `sessionSecret` da configuração, PB02):
 
 ```js
-// src/middlewares/auth.js (continuação)
+// src/middlewares/auth.js
+const crypto = require('crypto');
+const { AppError } = require('../utils/errors');
+
 const TOKEN_TTL_MS = 8 * 3600 * 1000;
 const sign = (payload, secret) => crypto.createHmac('sha256', secret).update(payload).digest('base64url');
 
-function issueToken(userId, secret) {
-  const payload = Buffer.from(JSON.stringify({ uid: userId, exp: Date.now() + TOKEN_TTL_MS })).toString('base64url');
+function safeEqual(a, b) {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function issueToken({ userId, isAdmin = false }, secret) {
+  const claims = { uid: userId, adm: Boolean(isAdmin), exp: Date.now() + TOKEN_TTL_MS };
+  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
   return `${payload}.${sign(payload, secret)}`;
 }
 
@@ -504,25 +509,49 @@ function verifyToken(token, secret) {
   const [payload = '', signature = ''] = String(token).split('.');
   if (!payload || !safeEqual(signature, sign(payload, secret))) return null;
   try {
-    const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
-    return data.exp > Date.now() ? data.uid : null;
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return claims.exp > Date.now() ? claims : null;
   } catch {
     return null;
   }
 }
 
-// libera o dono da conta ou o token administrativo; getUserId diz de qual conta é a operação
-function requireAccountOwner({ sessionSecret, adminToken }, getUserId = (req) => Number(req.params.id)) {
-  return (req, res, next) => {
-    if (isAdmin(req, adminToken)) return next();
+function buildAuth({ sessionSecret, adminToken }) {
+  const adminTokenOk = (req) => Boolean(adminToken) && safeEqual(req.get('X-Admin-Token') || '', adminToken);
+  const claimsOf = (req) => {
     const header = req.get('Authorization') || '';
-    const uid = header.startsWith('Bearer ') ? verifyToken(header.slice(7), sessionSecret) : null;
-    if (uid === null) return next(new AppError('Autenticação necessária', 401));
-    return uid === getUserId(req) ? next() : next(new AppError('Acesso negado a esta conta', 403));
+    return header.startsWith('Bearer ') ? verifyToken(header.slice(7), sessionSecret) : null;
+  };
+  const isAdmin = (req) => adminTokenOk(req) || Boolean(claimsOf(req)?.adm);
+
+  return {
+    requireUser: (req, res, next) => (adminTokenOk(req) || claimsOf(req)
+      ? next()
+      : next(new AppError('Autenticação necessária', 401))),
+
+    // getUserId diz de qual conta é a operação (caminho ou corpo)
+    requireOwner: (getUserId = (req) => Number(req.params.id)) => (req, res, next) => {
+      if (isAdmin(req)) return next();
+      const claims = claimsOf(req);
+      if (!claims) return next(new AppError('Autenticação necessária', 401));
+      return claims.uid === getUserId(req) ? next() : next(new AppError('Acesso negado a esta conta', 403));
+    },
+
+    requireAdmin: (req, res, next) => {
+      if (isAdmin(req)) return next();
+      return claimsOf(req)
+        ? next(new AppError('Acesso restrito a administradores', 403))
+        : next(new AppError('Autenticação necessária', 401));
+    },
   };
 }
 
-// uso: router.delete('/users/:id', requireAccountOwner(config), asyncHandler(userController.remove));
+module.exports = { buildAuth, issueToken };
+
+// uso:
+// const auth = buildAuth(config);
+// router.delete('/users/:id', auth.requireOwner(), asyncHandler(userController.remove));
+// router.get('/admin/financial-report', auth.requireAdmin, asyncHandler(reportController.financial));
 ```
 
 Quando a rota já recebe a senha da conta, a prova é a senha conferida, sem exigir token:
@@ -536,12 +565,12 @@ if (existing && !(await verifyPassword(password, existing.passwordHash))) {
 ```
 
 **Cuidados:**
-- **Escopo.** O token administrativo vale só para as rotas administrativas da regra 3; a prova de identidade, só para as operações de identidade. Não adicione autenticação às rotas comuns que não envolvem contas: registre essa ausência como pendência.
-- **Contrato.** Caminhos, métodos e campos de entrada continuam os mesmos. O login mantém as chaves e ganha o token. Sem login no projeto, as operações de identidade aceitam só o token administrativo; não crie rotas novas. Sem credencial, 401; com o token de outra conta, 403; recurso desabilitado, 403. Tudo isso é mudança intencional, listada no resumo final.
-- **Ordem.** Verifique a prova antes de validar o corpo ou consultar o banco, para não revelar se uma conta existe.
-- **Segredo.** O segredo de assinatura vem da configuração, sem valor fixo no código. Se faltar, o valor aleatório gerado na inicialização invalida os tokens a cada reinício; registre isso no aviso de inicialização e no resumo final.
-- **Papel.** Impeça que o cliente defina o próprio papel: o campo `role`/`tipo` é ignorado ou exige o token administrativo, inclusive para o dono da conta.
-- **Exemplos.** Documente as variáveis no `.env.example` e atualize os exemplos de requisição que o projeto já tem (`*.http`, README) para enviar a credencial.
+- **Níveis.** Aplique a cada rota o nível do inventário da Fase 1. Não invente papéis: restringir por papel além do que o código já define fica como recomendação.
+- **Contrato.** Caminhos, métodos e campos de entrada continuam os mesmos. O login mantém as chaves e ganha o token. Sem login no projeto, os níveis acima de "pública" aceitam só o token administrativo ou a senha conferida; não crie rotas novas. Sem credencial, 401; credencial insuficiente ou recurso desabilitado, 403. Tudo isso é mudança intencional, listada no resumo final.
+- **Ordem.** Verifique a credencial antes de validar o corpo ou consultar o banco, para não revelar se um recurso ou uma conta existe.
+- **Segredo.** O segredo de assinatura vem da configuração, sem valor fixo no código. Se faltar, o valor aleatório gerado na inicialização invalida os tokens a cada reinício; registre isso no aviso de inicialização e no resumo final. O papel gravado no token vale até ele expirar.
+- **Papel.** O cliente não define o próprio papel: o campo `role`/`tipo` é ignorado ou exige o nível administrador, inclusive para o dono da conta.
+- **Exemplos.** Documente as variáveis no `.env.example` e atualize os exemplos de requisição que o projeto já tem (`*.http`, README) para enviar as credenciais.
 
 ## PB07 — Extrair regras de negócio para services
 
@@ -714,7 +743,7 @@ function createApp({ db, config }) {
   const productService = new ProductService({ products });
   const productController = buildProductController({ productService });
 
-  app.use('/api', buildProductRoutes({ productController, adminAuth: adminAuth(config.adminToken) }));
+  app.use('/api', buildProductRoutes({ productController, auth: buildAuth(config) }));
   app.use(errorHandler);
   return app;
 }
