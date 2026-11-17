@@ -1,31 +1,20 @@
 const path = require('path');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
-const IN_MEMORY_DATABASE = ':memory:';
+const MEMORY_DATABASE = ':memory:';
+const DEFAULT_PORT = 3000;
+const DEFAULT_HOST = '127.0.0.1';
+const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on']);
 
-const DEFAULTS = Object.freeze({
-  port: 3000,
-  host: '127.0.0.1',
-  databasePath: IN_MEMORY_DATABASE,
-  seedOnStart: true,
-});
+// Em todas as leituras, variável definida mas vazia vale como ausente.
 
-// Variável definida mas vazia vale como ausente.
-function read(env, name) {
-  const value = env[name];
-  if (value === undefined || value.trim() === '') return null;
-  return value.trim();
+function asBoolean(value, fallback) {
+  if (!value) return fallback;
+  return TRUE_VALUES.has(value.trim().toLowerCase());
 }
 
-function readBoolean(env, name, fallback) {
-  const value = read(env, name);
-  if (value === null) return fallback;
-  return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
-}
-
-function readPort(env) {
-  const value = read(env, 'PORT');
-  if (value === null) return DEFAULTS.port;
+function asPort(value, fallback) {
+  if (!value) return fallback;
   const port = Number(value);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`PORT inválida: ${value}`);
@@ -33,21 +22,21 @@ function readPort(env) {
   return port;
 }
 
-// Caminhos de arquivo são resolvidos a partir da raiz do projeto, não do diretório de execução.
-function readDatabasePath(env) {
-  const value = read(env, 'DATABASE_PATH');
-  if (value === null || value === IN_MEMORY_DATABASE) return DEFAULTS.databasePath;
+function resolveDatabasePath(value) {
+  if (!value || value === MEMORY_DATABASE) return MEMORY_DATABASE;
   return path.resolve(PROJECT_ROOT, value);
 }
 
 function loadConfig(env = process.env) {
-  return Object.freeze({
-    port: readPort(env),
-    host: read(env, 'HOST') || DEFAULTS.host,
-    databasePath: readDatabasePath(env),
-    seedOnStart: readBoolean(env, 'SEED_ON_START', DEFAULTS.seedOnStart),
-    adminToken: read(env, 'ADMIN_TOKEN'),
-  });
+  return {
+    port: asPort(env.PORT, DEFAULT_PORT),
+    host: env.HOST || DEFAULT_HOST,
+    databasePath: resolveDatabasePath(env.DATABASE_PATH),
+    seedOnStart: asBoolean(env.SEED_ON_START, true),
+    // Segredos: sem valor padrão no código.
+    adminToken: env.ADMIN_TOKEN || null,
+    paymentGatewayKey: env.PAYMENT_GATEWAY_KEY || null,
+  };
 }
 
 module.exports = { loadConfig };

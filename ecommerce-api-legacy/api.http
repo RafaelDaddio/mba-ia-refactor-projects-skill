@@ -1,8 +1,8 @@
 @baseUrl = http://localhost:3000
-# mesmo valor da variável de ambiente ADMIN_TOKEN usada em `npm start`
-@adminToken = troque-pelo-ADMIN_TOKEN
+# Mesmo valor da variável de ambiente ADMIN_TOKEN usada ao subir a aplicação.
+@adminToken = troque-pelo-valor-de-ADMIN_TOKEN
 
-### Checkout - sucesso
+### Checkout - sucesso (e-mail novo: cria a conta com a senha informada)
 POST {{baseUrl}}/api/checkout
 Content-Type: application/json
 
@@ -10,6 +10,18 @@ Content-Type: application/json
   "usr": "Guilherme",
   "eml": "gui@fullcycle.com.br",
   "pwd": "senhaforte",
+  "c_id": 2,
+  "card": "4111222233334444"
+}
+
+### Checkout - conta já cadastrada (exige a senha da conta em "pwd")
+POST {{baseUrl}}/api/checkout
+Content-Type: application/json
+
+{
+  "usr": "Leonan",
+  "eml": "leonan@fullcycle.com.br",
+  "pwd": "123",
   "c_id": 2,
   "card": "4111222233334444"
 }
@@ -32,3 +44,4 @@ X-Admin-Token: {{adminToken}}
 
 ### Deletar usuário
 DELETE {{baseUrl}}/api/users/1
+X-Admin-Token: {{adminToken}}

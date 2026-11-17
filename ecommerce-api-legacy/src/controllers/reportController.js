@@ -1,6 +1,6 @@
 function buildReportController({ reportService }) {
   return {
-    async financialReport(req, res) {
+    async financial(req, res) {
       res.status(200).json(await reportService.financialReport());
     },
   };

@@ -7,9 +7,9 @@ class ReportService {
     this.reports = reports;
   }
 
-  // Receita e valor pago por aluno consideram só pagamentos PAID.
+  /** Por curso: receita dos pagamentos PAID e a lista de alunos com o valor pago. */
   async financialReport() {
-    const rows = await this.reports.listCourseEnrollments();
+    const rows = await this.reports.findEnrollmentsByCourse();
     const byCourse = new Map();
 
     for (const row of rows) {
@@ -19,11 +19,11 @@ class ReportService {
       if (row.enrollment_id === null) continue;
 
       const entry = byCourse.get(row.course_id);
-      const paid = row.payment_status === PAYMENT_STATUS.PAID ? row.payment_amount : 0;
-      entry.revenue += paid;
+      const hasPayment = row.payment_amount !== null;
+      if (hasPayment && row.payment_status === PAYMENT_STATUS.PAID) entry.revenue += row.payment_amount;
       entry.students.push({
-        student: row.user_id === null ? UNKNOWN_STUDENT : row.user_name,
-        paid,
+        student: row.student_name ?? UNKNOWN_STUDENT,
+        paid: hasPayment ? row.payment_amount : 0,
       });
     }
 

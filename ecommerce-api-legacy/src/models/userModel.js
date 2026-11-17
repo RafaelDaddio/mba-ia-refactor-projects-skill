@@ -4,24 +4,24 @@ class UserModel {
   }
 
   findById(id) {
-    return this.db.get('SELECT id, name, email FROM users WHERE id = ?', [id]);
+    return this.db.get('SELECT id, name, email, pass FROM users WHERE id = ?', [id]);
   }
 
   findByEmail(email) {
-    return this.db.get('SELECT id, name, email FROM users WHERE email = ?', [email]);
+    return this.db.get('SELECT id, name, email, pass FROM users WHERE email = ?', [email]);
   }
 
+  /** Devolve o id da nova conta, ou null se o e-mail já estiver cadastrado. */
   async create({ name, email, passwordHash }) {
-    const { lastID } = await this.db.run(
-      'INSERT INTO users (name, email, pass) VALUES (?, ?, ?)',
+    const { lastID, changes } = await this.db.run(
+      'INSERT INTO users (name, email, pass) VALUES (?, ?, ?) ON CONFLICT (email) DO NOTHING',
       [name, email, passwordHash],
     );
-    return lastID;
+    return changes > 0 ? lastID : null;
   }
 
-  async delete(id) {
-    const { changes } = await this.db.run('DELETE FROM users WHERE id = ?', [id]);
-    return changes;
+  deleteById(id) {
+    return this.db.run('DELETE FROM users WHERE id = ?', [id]);
   }
 }
 

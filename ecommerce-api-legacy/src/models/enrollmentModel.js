@@ -4,21 +4,18 @@ class EnrollmentModel {
   }
 
   findByUserAndCourse(userId, courseId) {
-    return this.db.get(
-      'SELECT id FROM enrollments WHERE user_id = ? AND course_id = ?',
-      [userId, courseId],
-    );
+    return this.db.get('SELECT id FROM enrollments WHERE user_id = ? AND course_id = ?', [userId, courseId]);
   }
 
   async create(userId, courseId) {
-    const { lastID } = await this.db.run(
-      'INSERT INTO enrollments (user_id, course_id) VALUES (?, ?)',
-      [userId, courseId],
-    );
+    const { lastID } = await this.db.run('INSERT INTO enrollments (user_id, course_id) VALUES (?, ?)', [
+      userId,
+      courseId,
+    ]);
     return lastID;
   }
 
-  deleteByUser(userId) {
+  deleteByUserId(userId) {
     return this.db.run('DELETE FROM enrollments WHERE user_id = ?', [userId]);
   }
 }

@@ -2,32 +2,31 @@ const { AppError } = require('./errors');
 
 const INTEGER_TEXT = /^\d+$/;
 
-function requireText(value, field) {
-  if (typeof value !== 'string') throw new AppError(`'${field}' deve ser texto`, 400);
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function requireString(value, field) {
+  if (typeof value !== 'string' || value === '') {
+    throw new AppError(`Campo '${field}' deve ser um texto não vazio`, 400);
+  }
   return value;
 }
 
-// Aceita inteiro ou inteiro em texto ("2"), como o contrato original aceitava.
-function toPositiveInteger(value, field) {
-  const number = typeof value === 'string' && INTEGER_TEXT.test(value.trim()) ? Number(value) : value;
+/** Ausente, null ou vazio vira null; qualquer outro valor precisa ser texto. */
+function optionalString(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new AppError(`Campo '${field}' deve ser um texto`, 400);
+  return value;
+}
+
+/** Aceita inteiro ou texto só com dígitos (ex.: parâmetro de caminho, "2" num corpo JSON). */
+function requirePositiveInteger(value, field) {
+  const number = typeof value === 'string' && INTEGER_TEXT.test(value) ? Number(value) : value;
   if (!Number.isSafeInteger(number) || number < 1) {
-    throw new AppError(`'${field}' deve ser um número inteiro positivo`, 400);
+    throw new AppError(`Campo '${field}' deve ser um inteiro positivo`, 400);
   }
   return number;
 }
 
-function validateCheckout(body) {
-  const { usr, eml, pwd, c_id: courseId, card } = body && typeof body === 'object' ? body : {};
-  // Presença: mesma regra e mensagem do código original.
-  if (!usr || !eml || !courseId || !card) throw new AppError('Bad Request', 400);
-
-  return {
-    name: requireText(usr, 'usr'),
-    email: requireText(eml, 'eml'),
-    password: pwd ? requireText(pwd, 'pwd') : null,
-    courseId: toPositiveInteger(courseId, 'c_id'),
-    card: requireText(card, 'card'),
-  };
-}
-
-module.exports = { validateCheckout, toPositiveInteger };
+module.exports = { isPlainObject, requireString, optionalString, requirePositiveInteger };

@@ -9,246 +9,218 @@ Files:   3 analyzed | ~180 lines of code
 
 ## Summary
 
-CRITICAL: 5 | HIGH: 6 | MEDIUM: 11 | LOW: 7
+CRITICAL: 5 | HIGH: 5 | MEDIUM: 12 | LOW: 7
 
 ## Findings
 
-### F01 · [CRITICAL] Relatório financeiro administrativo exposto sem autenticação
-- **Anti-pattern:** AP06 — Endpoint administrativo ou destrutivo desprotegido
-- **File:** `src/AppManager.js:80-129`
-- **Description:** `GET /api/admin/financial-report` tem `admin` no caminho. Para cada curso, devolve a receita e a lista de alunos com o valor pago (`src/AppManager.js:90`, `src/AppManager.js:112-115`). Não verifica nenhuma credencial, e `src/app.js:5-10` não registra middleware de administração.
-- **Impact:** Qualquer cliente anônimo obtém o faturamento por curso e o nome de cada aluno com o valor que pagou.
-- **Recommendation:** Exigir credencial administrativa (token lido do ambiente e enviado em header) antes do handler. Caminho e formato da resposta continuam os mesmos (PB06).
+### F01 · [CRITICAL] Credenciais de produção e chave do gateway fixas no código
+- **Anti-pattern:** AP02 — Segredos e credenciais hardcoded
+- **File:** `src/utils.js:2-5`
+- **Description:** O objeto `config` traz literais `dbUser: "admin_master"`, `dbPass: "senha_super_secreta_prod_123"`, `paymentGatewayKey: "pk_live_1234567890abcdef"` e `smtpUser`. Não há leitura de `process.env` em nenhum arquivo.
+- **Impact:** Quem tem acesso ao repositório tem a senha do banco e a chave live do gateway; trocar um segredo exige novo commit e o valor antigo fica no histórico do git.
+- **Recommendation:** Mover a configuração para um módulo que lê `process.env`, sem valor padrão para segredos, e documentar as variáveis em `.env.example` (PB02). Os segredos já versionados devem ser rotacionados.
 
-### F02 · [CRITICAL] Número do cartão e chave do gateway gravados em log
+### F02 · [CRITICAL] Número do cartão e chave do gateway gravados no log
 - **Anti-pattern:** AP04 — Exposição de dados sensíveis
 - **File:** `src/AppManager.js:45`
-- **Description:** Cada checkout executa ``console.log(`Processando cartão ${cc} na chave ${config.paymentGatewayKey}`)``. A linha grava o número completo recebido em `card` e a chave `pk_live_...` de `src/utils.js:4`.
-- **Impact:** Quem tem acesso aos logs obtém números de cartão completos e a chave de produção do gateway. Os dados de cartão passam a ficar armazenados fora de qualquer controle.
-- **Recommendation:** Tirar o cartão e a chave do log. Se for preciso registrar algo, usar só os 4 últimos dígitos (PB04).
+- **Description:** Cada checkout executa ``console.log(`Processando cartão ${cc} na chave ${config.paymentGatewayKey}`)``, com o número completo do cartão recebido em `card` e a chave `pk_live_...`.
+- **Impact:** O número completo do cartão e a chave do gateway ficam em texto puro no stdout e em qualquer coletor de logs.
+- **Recommendation:** Remover os dois valores do log; se for preciso rastrear, registrar só os 4 últimos dígitos (PB04).
 
-### F03 · [CRITICAL] Chave live de pagamento e credenciais de banco e SMTP fixas no código
-- **Anti-pattern:** AP02 — Segredos e credenciais hardcoded
-- **File:** `src/utils.js:1-7`
-- **Description:** O objeto `config` traz `dbUser: "admin_master"`, `dbPass: "senha_super_secreta_prod_123"`, `paymentGatewayKey: "pk_live_1234567890abcdef"` e `smtpUser`. Pelo Grep, `dbUser`, `dbPass` e `smtpUser` não são lidos em nenhum ponto do projeto. `paymentGatewayKey` só é usada no log de `src/AppManager.js:45` (F02).
-- **Impact:** Quem acessa o repositório obtém a senha de banco de produção e a chave live do gateway. Para trocar os segredos é preciso alterar o código, e eles continuam no histórico do git.
-- **Recommendation:** Ler os segredos de variáveis de ambiente, sem valor padrão sensível, num módulo de configuração, e remover os que não são usados (PB02). A rotação das credenciais já expostas no histórico fica como pendência fora do código.
-
-### F04 · [CRITICAL] Senha com hash caseiro reversível, senha padrão fixa e seed em texto puro
+### F03 · [CRITICAL] Senhas com "hash" caseiro, senha padrão e seed em texto puro
 - **Anti-pattern:** AP03 — Armazenamento inseguro de senha
 - **File:** `src/utils.js:17-23`, `src/AppManager.js:68`, `src/AppManager.js:18`
-- **Description:** `badCrypto` repete 10.000 vezes os 2 primeiros caracteres do base64 da senha e corta em 10. O resultado depende só do primeiro caractere e de 4 bits do segundo: `"123"` e `"123456"` geram o mesmo valor `MTMTMTMTMT` (confirmado com `node -e`). O checkout chama `badCrypto(p || "123456")`, então uma conta criada sem `pwd` recebe a senha conhecida `123456`. O seed grava `'123'` em texto puro na coluna `pass`.
-- **Impact:** Quem obtém a tabela `users` recupera as senhas, ou senhas equivalentes, na hora. Contas criadas sem `pwd` têm senha pública.
-- **Recommendation:** Gravar com `crypto.scrypt` e salt aleatório (biblioteca padrão do Node), no checkout e no seed. Na falta de `pwd`, gerar um valor aleatório que ninguém conhece em vez de uma senha fixa (PB03). Tornar `pwd` obrigatório mudaria o contrato do checkout e fica como pendência.
+- **Description:** `badCrypto` repete 10.000 vezes os 2 primeiros caracteres do base64 da senha e corta em 10 caracteres: o resultado depende só do início da senha, sem salt. Quando `pwd` não vem, o checkout grava o hash de `"123456"` (`p || "123456"`). O seed insere o usuário com `pass = '123'` em texto puro.
+- **Impact:** Senhas que começam igual geram o mesmo valor e o valor guardado revela o início da senha. Contas criadas sem `pwd` têm senha conhecida. A senha gravada nunca é conferida em nenhum ponto do código.
+- **Recommendation:** Usar `crypto.scrypt` com salt aleatório e comparação em tempo constante, aplicar o mesmo hash ao seed e eliminar a senha padrão (PB03). Exigir `pwd` no cadastro via checkout é correção de validação (PB11).
 
-### F05 · [CRITICAL] AppManager concentra conexão, schema, seed, rotas, SQL e regras
+### F04 · [CRITICAL] Relatório financeiro administrativo sem credencial
+- **Anti-pattern:** AP06 — Endpoint administrativo ou destrutivo desprotegido
+- **File:** `src/AppManager.js:80-129`
+- **Description:** `GET /api/admin/financial-report` é registrada sem nenhum middleware ou verificação; devolve faturamento por curso e o nome de cada aluno com o valor pago.
+- **Impact:** Qualquer cliente anônimo lê o faturamento e a lista de alunos de todos os cursos.
+- **Recommendation:** Exigir `X-Admin-Token` (valor vindo da configuração) com 401 sem prova e 403 com prova inválida (PB06).
+
+### F05 · [CRITICAL] AppManager concentra conexão, schema, seed, rotas, regras e SQL
 - **Anti-pattern:** AP05 — God Class / God Module
 - **File:** `src/AppManager.js:4-139`
-- **Description:** A mesma classe faz quatro coisas:
-  - cria a conexão (`:7`);
-  - cria as 5 tabelas e insere o seed a cada boot (`:10-23`);
-  - registra as 3 rotas num único método de ~110 linhas (`:25-138`);
-  - executa o SQL inline e as regras de checkout, faturamento e exclusão para usuários, cursos, matrículas, pagamentos e auditoria.
+- **Description:** A classe abre o banco (linha 7), cria as 5 tabelas e o seed (10-23) e registra as 3 rotas (25-138), cujos handlers contêm o SQL e as regras de usuários, cursos, matrículas, pagamentos e auditoria.
+- **Impact:** Nenhuma parte é testável isoladamente; qualquer mudança em um domínio toca o mesmo arquivo e os mesmos closures dos outros.
+- **Recommendation:** Separar em config, database, models (um por tabela), services, controllers, routes e middlewares, com composition root no entry point (PB05).
 
-  Não há camadas de model, service ou controller.
-- **Impact:** Nenhuma regra pode ser testada sem subir o Express e o banco. Qualquer mudança em um domínio mexe no mesmo método.
-- **Recommendation:** Separar em configuração, banco (conexão e schema/seed), models/repositórios, services, controllers e rotas, com composition root em `src/app.js` (PB05).
+### F06 · [HIGH] Identidade das contas desprotegida no checkout e na exclusão
+- **Anti-pattern:** AP10 — Autenticação ausente ou de fachada
+- **File:** `src/AppManager.js:131-137`, `src/AppManager.js:40`, `src/AppManager.js:73-75`
+- **Description:** `DELETE /api/users/:id` apaga qualquer conta sem identificar quem pede. No checkout, quando o e-mail já existe, o fluxo segue direto para `processPaymentAndEnroll(user.id)`: a `pwd` recebida é ignorada e nunca comparada com a senha gravada.
+- **Impact:** Qualquer cliente exclui a conta de outra pessoa ou cria matrícula e pagamento em nome de uma conta existente sabendo apenas o e-mail.
+- **Recommendation:** No checkout com e-mail existente, conferir `pwd` contra o hash da conta ou aceitar `X-Admin-Token`; na exclusão, exigir `X-Admin-Token`, já que a rota não recebe senha e o projeto não tem login (PB06). Não criar rota de login nem papéis.
 
-### F06 · [HIGH] `card` ou `pwd` não textuais derrubam o processo
+### F07 · [HIGH] Entrada não string derruba o processo dentro de callbacks do sqlite
 - **Anti-pattern:** AP12 — Exceção não tratada derruba o processo
-- **File:** `src/AppManager.js:46`, `src/AppManager.js:68` → `src/utils.js:20`, `src/AppManager.js:92-93`
-- **Description:** A validação de `:35` só confere presença. As falhas abaixo foram confirmadas com `node -e`:
-  - Com `"card": 4111222233334444` (número), `cc.startsWith("4")` lança `TypeError: ... startsWith is not a function` dentro do callback do sqlite3.
-  - Com `"pwd": 123` e um e-mail novo, `Buffer.from(123)` lança `ERR_INVALID_ARG_TYPE`.
+- **File:** `src/AppManager.js:46`, `src/AppManager.js:68` (com `src/utils.js:20`), `src/AppManager.js:92-93`
+- **Description:** `cc.startsWith("4")` roda dentro de callback do sqlite e a validação da linha 35 só checa presença: `card` numérico lança `TypeError`. `badCrypto(p)` chama `Buffer.from(pwd)`, que lança para `pwd` numérico, também dentro de callback. No relatório, `enrollments.length` é lido sem checar `err`.
+- **Impact:** No Express 4, exceção em callback assíncrono não chega a nenhum middleware: uma única requisição com `"card": 4111` encerra o servidor para todos os clientes.
+- **Recommendation:** Validar tipos antes de qualquer acesso ao banco, trocar callbacks por async/await com erros encaminhados a um middleware central (PB11, PB14, PB09).
 
-  No relatório, `enrollments.length` é lido sem checar `err` (`:92-93`). No Express 4, uma exceção dentro de callback do sqlite3 não chega ao Express e encerra o processo.
-- **Impact:** Uma única requisição anônima derruba a API para todos os clientes.
-- **Recommendation:** Validar os tipos antes de usar e devolver 400 (PB11). Converter o fluxo para async/await com propagação de erro (PB14) e um middleware de erro central (PB09).
-
-### F07 · [HIGH] Qualquer cliente exclui qualquer usuário
-- **Anti-pattern:** AP10 — Autenticação ausente ou de fachada
-- **File:** `src/AppManager.js:131-137`
-- **Description:** `DELETE /api/users/:id` apaga o usuário do id informado sem identificar quem faz a requisição. Nenhuma rota tem login, token ou sessão.
-- **Impact:** Um cliente anônimo apaga contas de outros usuários, e os registros dessas contas ficam órfãos (F13).
-- **Recommendation:** Exigir autenticação e verificar que quem pede é o dono da conta ou um administrador. Pela regra 3, essa rota é CRUD de recurso individual: a mudança alteraria o contrato e fica como pendência.
-
-### F08 · [HIGH] Checkout pede senha, mas não a confere quando o e-mail já existe
-- **Anti-pattern:** AP10 — Autenticação ausente ou de fachada
-- **File:** `src/AppManager.js:40`, `src/AppManager.js:73-75`
-- **Description:** Quando `eml` já existe, o handler segue com `user.id` sem comparar `pwd` com a senha gravada. `pwd` só é usado ao criar uma conta (`:68`).
-- **Impact:** Quem conhece o e-mail de alguém cria matrículas e pagamentos na conta dessa pessoa. O campo `pwd` dá a falsa impressão de que existe verificação.
-- **Recommendation:** Verificar a senha da conta existente ou exigir autenticação prévia. O código não declara essa regra e a mudança alteraria as respostas do checkout, então fica como pendência (regra 4).
-
-### F09 · [HIGH] Regras de negócio dentro dos handlers de rota
+### F08 · [HIGH] Regras de negócio dentro dos handlers de rota
 - **Anti-pattern:** AP07 — Regra de negócio fora da camada de serviço
-- **File:** `src/AppManager.js:46-48`, `src/AppManager.js:66-72`, `src/AppManager.js:108-115`
-- **Description:** O handler do checkout decide a aprovação do pagamento (`cc.startsWith("4") ? "PAID" : "DENIED"`), cria a conta quando o e-mail não existe e encadeia matrícula, pagamento e auditoria. O handler do relatório soma a receita e monta a lista de alunos.
-- **Impact:** As regras de pagamento e faturamento não podem ser testadas nem reutilizadas sem HTTP. Mudar a regra de aprovação exige editar o handler.
-- **Recommendation:** Mover as regras para services de checkout, relatório e usuário e deixar os controllers só com entrada e saída HTTP (PB07).
+- **File:** `src/AppManager.js:43-75`, `src/AppManager.js:89-127`
+- **Description:** O handler do checkout decide a aprovação do pagamento, cria o usuário, a matrícula, o pagamento e o log de auditoria; o handler do relatório soma a receita só de pagamentos `PAID` e monta a lista de alunos.
+- **Impact:** As regras só podem ser exercitadas por HTTP e ficam misturadas a status codes e SQL.
+- **Recommendation:** Extrair `checkoutService`, `reportService` e `userService`; os controllers ficam com a tradução HTTP (PB07).
 
-### F10 · [HIGH] Conexão de banco criada dentro da classe, sem injeção
+### F09 · [HIGH] Infraestrutura instanciada dentro da classe, sem injeção
 - **Anti-pattern:** AP09 — Acoplamento forte sem injeção de dependência
-- **File:** `src/AppManager.js:7`, `src/app.js:8-10`
-- **Description:** O construtor faz `new sqlite3.Database(':memory:')` e todas as rotas usam `this.db` diretamente. `app.js` não tem como fornecer outro banco.
-- **Impact:** Não é possível trocar o banco num teste nem reutilizar as regras com outra conexão.
-- **Recommendation:** Criar a conexão no composition root e injetá-la nos repositórios e services (PB08).
+- **File:** `src/AppManager.js:7`, `src/AppManager.js:2`, `src/app.js:8-12`
+- **Description:** O construtor faz `new sqlite3.Database(':memory:')`, a classe importa `config` e os helpers direto de `./utils`, e `app.js` cria o app, o manager e já chama `listen` no mesmo módulo.
+- **Impact:** Não dá para trocar o banco ou a configuração num teste, nem importar o app sem abrir a porta.
+- **Recommendation:** Criar a conexão num módulo de banco, injetá-la em models e services e montar tudo numa app factory separada do `listen` (PB08).
 
-### F11 · [HIGH] Cache global mutável que cresce e nunca é lido
+### F10 · [HIGH] Cache global mutável que só cresce
 - **Anti-pattern:** AP08 — Estado global mutável / conexão compartilhada
-- **File:** `src/utils.js:9`, `src/utils.js:12-15`, `src/AppManager.js:59`
-- **Description:** `globalCache` é um objeto de módulo que ganha a chave `last_checkout_<userId>` a cada checkout. É exportado, mas o Grep não encontra nenhum módulo que o leia.
-- **Impact:** Estado compartilhado entre requisições que ganha uma chave por usuário comprador, sem limite, sem expiração e sem uso.
-- **Recommendation:** Remover o cache e o `logAndCache` (PB08).
+- **File:** `src/utils.js:9-15`, `src/AppManager.js:59`
+- **Description:** `globalCache` é um objeto de módulo que recebe uma chave `last_checkout_<userId>` a cada checkout. Nenhum arquivo lê esse objeto e nada remove entradas.
+- **Impact:** Estado compartilhado por todas as requisições, sem limite de tamanho e sem utilidade observável.
+- **Recommendation:** Remover o cache, já que nada o consome, mantendo apenas o registro em log (PB08).
 
-### F12 · [MEDIUM] A mesma compra pode ser cobrada duas vezes, e o e-mail pode se repetir
+### F11 · [MEDIUM] Exclusão de usuário deixa órfãos e sempre responde sucesso
 - **Anti-pattern:** AP17 — Integridade de dados e regras de estado
-- **File:** `src/AppManager.js:50-55`, `src/AppManager.js:40`, `src/AppManager.js:66-72`, `src/AppManager.js:12-14`
-- **Description:** O checkout não verifica se o usuário já está matriculado no curso: repetir a requisição cria outra matrícula e outro pagamento `PAID`. O e-mail é a chave de busca do usuário (`:40`), mas `users.email` não é `UNIQUE`, e a busca e o insert (`:69`) são passos separados. Assim, dois checkouts simultâneos com o mesmo e-mail novo criam dois usuários. `enrollments` também não tem `UNIQUE (user_id, course_id)`.
-- **Impact:** O mesmo curso é cobrado em dobro. Usuários duplicados tornam ambígua a busca por e-mail.
-- **Recommendation:** Rejeitar a matrícula repetida com 409 antes de cobrar (mudança intencional). Declarar `UNIQUE` em `users.email` e em `(user_id, course_id)` e tratar o conflito na criação do usuário. O banco é recriado a cada boot, então o schema pode mudar sem migração (PB12).
+- **File:** `src/AppManager.js:131-137`
+- **Description:** O handler executa só `DELETE FROM users`, ignora `err`, não verifica se alguma linha foi afetada e responde 200 com "Usuário deletado, mas as matrículas e pagamentos ficaram sujos no banco." O relatório passa a mostrar o aluno como `'Unknown'` (linha 113).
+- **Impact:** Matrículas e pagamentos apontam para usuário inexistente; id inexistente ou erro de banco recebe 200.
+- **Recommendation:** Remover pagamentos, matrículas e usuário na mesma transação e devolver 404 para id inexistente; a própria mensagem do código declara que os dados ficam sujos (PB12).
 
-### F13 · [MEDIUM] Excluir um usuário deixa matrículas e pagamentos órfãos e confirma ids inexistentes
+### F12 · [MEDIUM] A mesma matrícula pode ser comprada e cobrada mais de uma vez
 - **Anti-pattern:** AP17 — Integridade de dados e regras de estado
-- **File:** `src/AppManager.js:131-137`, `src/AppManager.js:12-16`
-- **Description:** O handler executa só `DELETE FROM users`, e a própria resposta admite: "Usuário deletado, mas as matrículas e pagamentos ficaram sujos no banco." O schema não declara `FOREIGN KEY` nem ativa `PRAGMA foreign_keys`. O handler ignora o `err` e o número de linhas afetadas, então um id inexistente recebe a mesma mensagem de sucesso.
-- **Impact:** Matrículas e pagamentos sem dono continuam no relatório financeiro como aluno `Unknown` (`:113`). O cliente recebe confirmação de exclusões que não aconteceram.
-- **Recommendation:** Excluir pagamentos, matrículas e usuário numa transação, declarar as chaves estrangeiras e devolver 404 quando o usuário não existe. A mensagem de sucesso, que hoje anuncia a sujeira, deve ser corrigida (PB12).
+- **File:** `src/AppManager.js:50-54`
+- **Description:** O checkout insere em `enrollments` e `payments` sem consultar se o usuário já está matriculado no curso; não há `UNIQUE(user_id, course_id)`.
+- **Impact:** Repetir a requisição gera duas matrículas e dois pagamentos `PAID` para o mesmo aluno e curso, e o relatório soma a receita em dobro.
+- **Recommendation:** Verificar a matrícula existente antes de cobrar e responder 409 (PB12).
 
-### F14 · [MEDIUM] Checkout grava matrícula, pagamento e auditoria sem transação
+### F13 · [MEDIUM] Checkout grava em até quatro passos sem transação
 - **Anti-pattern:** AP17 — Integridade de dados e regras de estado
-- **File:** `src/AppManager.js:50-61`
-- **Description:** São três `INSERT` encadeados em callbacks, sem `BEGIN/COMMIT`. Se o insert do pagamento falha (`:55`), a matrícula já gravada fica sem pagamento. O erro do insert de auditoria é ignorado (`:57`).
-- **Impact:** Uma matrícula sem pagamento aparece no relatório com `paid: 0` e dá acesso ao curso sem cobrança registrada.
-- **Recommendation:** Executar os três inserts numa transação serializada na conexão (PB12).
+- **File:** `src/AppManager.js:50-57`, `src/AppManager.js:69`
+- **Description:** Usuário, matrícula, pagamento e log de auditoria são `INSERT`s independentes, encadeados por callbacks. O usuário é criado antes da decisão do pagamento, e o erro do `INSERT` de auditoria é ignorado.
+- **Impact:** Falha no pagamento deixa matrícula sem pagamento; pagamento recusado deixa a conta criada.
+- **Recommendation:** Envolver matrícula, pagamento e auditoria em uma transação (PB12). Se a conta criada num checkout recusado deve ou não persistir é regra que o código não declara: fica como pendência.
 
-### F15 · [MEDIUM] Erros ignorados, mascarados ou devolvidos com stack trace
-- **Anti-pattern:** AP16 — Tratamento de erros não centralizado
-- **File:** `src/AppManager.js:38`, `src/AppManager.js:57`, `src/AppManager.js:92`, `src/AppManager.js:104-106`, `src/AppManager.js:133`, `src/app.js:5-14`
-- **Description:** Cada callback trata `err` de um jeito. Um erro de banco na busca do curso vira 404 (`:38`). O `err` é ignorado no insert de auditoria, nas consultas do relatório e no `DELETE`. Não há middleware de erro: um JSON malformado cai no handler padrão do Express, que fora de `NODE_ENV=production` devolve HTML com `err.stack` (`node_modules/finalhandler/index.js:176-178`).
-- **Impact:** Falhas de banco chegam ao cliente como "curso não encontrado" ou como sucesso. O stack trace expõe caminhos internos do servidor.
-- **Recommendation:** Criar um middleware de erro central que responda em JSON, usar erros de domínio com status e propagar `err` (PB09).
+### F14 · [MEDIUM] Schema sem NOT NULL, UNIQUE nem FOREIGN KEY
+- **Anti-pattern:** AP17 — Integridade de dados e regras de estado
+- **File:** `src/AppManager.js:12-16`
+- **Description:** As 5 tabelas declaram só a chave primária. `users.email` é a chave de busca do checkout (linha 40) e não é `UNIQUE`; `enrollments.user_id`, `enrollments.course_id` e `payments.enrollment_id` não têm `FOREIGN KEY`; não há `PRAGMA foreign_keys = ON`.
+- **Impact:** O banco aceita e-mails duplicados, referências a registros inexistentes e campos nulos.
+- **Recommendation:** Adicionar `NOT NULL`, `UNIQUE(email)`, chaves estrangeiras e o `PRAGMA`; como o banco é em memória e recriado a cada boot, não há dados existentes a migrar (PB12).
 
-### F16 · [MEDIUM] Dependências com vulnerabilidades conhecidas e pacotes deprecated
-- **Anti-pattern:** AP22 — Dependências vulneráveis, sem uso ou sem versão fixa
-- **File:** `package.json:10-11`, `package-lock.json`
-- **Description:** `npm audit --omit=dev` reporta 13 vulnerabilidades (2 critical, 8 high, 1 moderate, 2 low). Elas se dividem em duas cadeias, e as versões são declaradas com `^`.
-  - **Cadeia do Express 4.22.1**, no caminho das requisições:
-    - `body-parser@1.20.4`: DoS com corpo comprimido. O `express.json()` de `src/app.js:6` descomprime por padrão.
-    - `qs@6.14.2`.
-    - `path-to-regexp@0.1.12`.
-    - `proxy-addr@2.0.7`: só explorável com `trust proxy`, que não está configurado.
-  - **Cadeia de instalação do sqlite3 5.1.7:**
-    - Vulneráveis: `node-gyp@8.4.1`, `tar@6.2.1`, `@tootallnate/once`, `ip-address@10.1.0` e `brace-expansion@1.1.12`.
-    - Marcados como deprecated no lockfile: `tar@6.2.1`, `prebuild-install@7.1.3` e os opcionais `glob@7.2.3`, `inflight@1.0.6`, `rimraf@3.0.2`, `npmlog@6.0.2`, `gauge@4.0.4`, `are-we-there-yet@3.0.1` e `@npmcli/move-file@1.1.2`.
-- **Impact:** A API fica exposta a DoS pelo corpo da requisição. A instalação das dependências nativas também tem risco.
-- **Recommendation:** `npm audit fix` resolve a cadeia do Express sem quebra. Para o sqlite3, avaliar a versão 6, que o npm marca como mudança com quebra. Atualizar pacotes depende de aprovação e fica como pendência.
-
-### F17 · [MEDIUM] Entrada do checkout validada só por presença
-- **Anti-pattern:** AP15 — Validação de entrada ausente ou inconsistente
-- **File:** `src/AppManager.js:29-35`, `src/AppManager.js:132`
-- **Description:** A única validação é `if (!u || !e || !cid || !cc)`.
-  - Tipo e formato de `usr`, `eml`, `c_id` e `card` não são conferidos, e `pwd` não é validado.
-  - Um `usr` objeto é gravado como o texto `[object Object]` (comportamento do driver confirmado com `node -e` num banco em memória). `eml` aceita qualquer texto.
-  - O `id` de `DELETE /api/users/:id` vai direto ao SQL.
-- **Impact:** O banco recebe dados inconsistentes. Os casos que derrubam o processo estão no F06.
-- **Recommendation:** Validar os tipos num único ponto e devolver 400 (PB11), aceitando `c_id` numérico em texto para não quebrar os clientes atuais. Regras de formato que o código não declara, como e-mail e número de cartão, ficam como recomendação (regra 4).
-
-### F18 · [MEDIUM] Consultas N+1 no relatório financeiro
+### F15 · [MEDIUM] Relatório financeiro com N+1 e sem limite
 - **Anti-pattern:** AP13 — Queries N+1 e agregações ineficientes
 - **File:** `src/AppManager.js:83-106`
-- **Description:** O relatório faz 1 consulta de cursos, 1 de matrículas por curso e, para cada matrícula, 1 de usuário e 1 de pagamento: 1 + C + 2E consultas.
-- **Impact:** O tempo do relatório cresce linearmente com o número de matrículas. Com 10 mil matrículas, são mais de 20 mil consultas por requisição.
-- **Recommendation:** Uma consulta com `LEFT JOIN` de cursos, matrículas, usuários e pagamentos, agregada no service (PB10).
+- **Description:** Uma query lista os cursos, uma por curso lista as matrículas e duas por matrícula buscam usuário e pagamento. Tudo é carregado em memória e a receita é somada em JavaScript.
+- **Impact:** Com C cursos e M matrículas são 1 + C + 2M queries por requisição, e a resposta cresce sem limite.
+- **Recommendation:** Uma única consulta com `LEFT JOIN` entre cursos, matrículas, usuários e pagamentos, agrupada no service (PB10).
 
-### F19 · [MEDIUM] Callbacks aninhados e contadores manuais
+### F16 · [MEDIUM] Callbacks em 5 níveis e contadores manuais
 - **Anti-pattern:** AP23 — Callbacks aninhados e controle assíncrono manual
-- **File:** `src/AppManager.js:37-77`, `src/AppManager.js:86-122`, `src/AppManager.js:26`
-- **Description:**
-  - O checkout aninha cinco callbacks de banco.
-  - O relatório decide quando responder com `coursesPending--` e `enrPending--`, e o bloco "adiciona ao array, decrementa e responde" está duplicado (`:95-99` e `:118-122`).
-  - `const self = this` convive com arrow functions e `function`, usada para ler `this.lastID`.
-  - O curso entra em `report` quando suas consultas terminam: um curso sem matrículas entra antes de um curso cujas consultas de alunos ainda estão pendentes.
-- **Impact:** O fluxo é difícil de seguir. Um caminho que esqueça de decrementar deixa a requisição sem resposta, e a ordem dos cursos no relatório depende da ordem de conclusão das consultas.
-- **Recommendation:** Promisificar o acesso ao banco e reescrever com async/await (PB14).
+- **File:** `src/AppManager.js:37-62`, `src/AppManager.js:86-122`, `src/AppManager.js:26`
+- **Description:** O checkout aninha 5 callbacks. O relatório usa `coursesPending--` e `enrPending--` para decidir quando responder, com o bloco de finalização duplicado (95-99 e 118-122). `const self = this` convive com arrow functions.
+- **Impact:** A ordem do array do relatório depende da ordem de conclusão dos callbacks, e um caminho de erro que não decremente o contador deixa a requisição sem resposta.
+- **Recommendation:** Envolver o sqlite3 em Promises e reescrever com async/await (PB14).
 
-### F20 · [MEDIUM] Respostas em texto puro e JSON misturados
+### F17 · [MEDIUM] Erros tratados callback a callback, sem middleware central
+- **Anti-pattern:** AP16 — Tratamento de erros não centralizado
+- **File:** `src/AppManager.js:38`, `src/AppManager.js:41`, `src/AppManager.js:51`, `src/AppManager.js:55`, `src/AppManager.js:57`, `src/AppManager.js:70`, `src/AppManager.js:84`, `src/AppManager.js:92`, `src/AppManager.js:104-106`, `src/AppManager.js:133`, `src/app.js:5-10`
+- **Description:** Cada callback repete `if (err) return res.status(500).send(...)`; em 5 pontos o `err` é ignorado; `err || !course` transforma erro de banco em 404. `app.js` não registra middleware de erro nem de 404, então JSON inválido e rota inexistente caem na resposta HTML padrão do Express.
+- **Impact:** Erros somem sem registro, o status não reflete a causa e o cliente recebe HTML numa API JSON.
+- **Recommendation:** Classes de erro da aplicação, um middleware de erro e um de 404 (PB09).
+
+### F18 · [MEDIUM] Validação do checkout checa só presença
+- **Anti-pattern:** AP15 — Validação de entrada ausente ou inconsistente
+- **File:** `src/AppManager.js:29-35`, `src/AppManager.js:132`
+- **Description:** A única validação é `!u || !e || !cid || !cc`. Tipos não são checados, `pwd` é opcional e `:id` da exclusão vai direto para a query.
+- **Impact:** Valores de tipo errado chegam ao banco ou derrubam o processo (F07); contas são criadas sem senha informada (F03).
+- **Recommendation:** Validar tipo de `usr`, `eml`, `pwd`, `c_id`, `card` e `id` com 400 (PB11). Formato de e-mail e de cartão são regras que o código não declara: ficam como pendência.
+
+### F19 · [MEDIUM] Erros em texto puro, sucesso em JSON
 - **Anti-pattern:** AP25 — Formato de resposta sem padrão
-- **File:** `src/AppManager.js:35`, `src/AppManager.js:38`, `src/AppManager.js:41`, `src/AppManager.js:48`, `src/AppManager.js:51`, `src/AppManager.js:55`, `src/AppManager.js:70`, `src/AppManager.js:84`, `src/AppManager.js:135`
-- **Description:** O checkout e o relatório respondem sucesso em JSON. Todos os erros saem em texto puro ("Bad Request", "Curso não encontrado", "Erro DB", "Pagamento recusado", …), misturando inglês e português, e a exclusão responde com texto.
-- **Impact:** Os clientes precisam tratar dois formatos e não têm um campo estável para identificar o erro.
-- **Recommendation:** Responder os erros em JSON, num formato único, pelo middleware de erro (PB09). As respostas de sucesso mantêm o formato atual (contrato).
+- **File:** `src/AppManager.js:35`, `src/AppManager.js:38`, `src/AppManager.js:48`, `src/AppManager.js:60`, `src/AppManager.js:135` (e outros 5 `send` de erro)
+- **Description:** Os erros usam `res.status(...).send("texto")`, em inglês ("Bad Request") e português; os sucessos do checkout e do relatório são JSON; o sucesso da exclusão é texto puro.
+- **Impact:** O cliente precisa tratar dois formatos e não tem um campo estável para ler o erro.
+- **Recommendation:** Padronizar os erros em um único formato JSON (PB09). A resposta de sucesso da exclusão continua como está, por ser contrato.
 
-### F21 · [MEDIUM] `utils.js` mistura configuração, cache e hash de senha
+### F20 · [MEDIUM] Schema, seed e listen disparados na carga do entry point
+- **Anti-pattern:** AP19 — Efeitos colaterais na inicialização
+- **File:** `src/AppManager.js:10-23`, `src/app.js:8-14`
+- **Description:** `initDb` mistura DDL e seed e roda em todo boot, em qualquer ambiente; `app.js` chama `listen` sem esperar o banco e sem separar criação do app e subida do servidor.
+- **Impact:** Não há como subir sem seed nem como importar o app sem abrir a porta 3000.
+- **Recommendation:** Separar schema e seed em módulos próprios, aguardá-los e só então chamar `listen` (PB08). O seed continua carregando no boot, como o README descreve.
+
+### F21 · [MEDIUM] utils.js mistura configuração, cache e hash de senha
 - **Anti-pattern:** AP24 — Responsabilidade no módulo errado
 - **File:** `src/utils.js:1-25`
-- **Description:** O módulo genérico "utils" guarda a configuração com segredos, o cache global, o log de cache e a função de hash de senha. `AppManager` importa tudo junto (`src/AppManager.js:2`).
-- **Impact:** Responsabilidades de segurança e de configuração ficam escondidas num módulo genérico, e qualquer import dele carrega os segredos.
-- **Recommendation:** Separar a configuração e o hash de senha em módulos próprios. O cache sai com o F11 (PB05).
+- **Description:** O mesmo arquivo exporta `config` com segredos, o cache global com log, o contador `totalRevenue` e `badCrypto`.
+- **Impact:** Qualquer módulo que precise de um helper importa também os segredos, e a regra de senha fica escondida num arquivo genérico.
+- **Recommendation:** Distribuir em `config/`, `utils/password.js` e `utils/logger.js` (PB05).
 
-### F22 · [MEDIUM] Campo `paid` do relatório ignora o status do pagamento
-- **Anti-pattern:** AP17 — Integridade de dados e regras de estado
-- **File:** `src/AppManager.js:108-115`
-- **Description:** A receita soma só os pagamentos `PAID` (`:108-110`), mas cada aluno recebe `paid: payment.amount` qualquer que seja o status (`:114`).
-- **Impact:** Hoje não há diferença visível, porque só pagamentos `PAID` são gravados: o `DENIED` retorna antes do insert (`:48`). Um pagamento com outro status apareceria como pago para o aluno sem entrar na receita.
-- **Recommendation:** Aplicar a mesma condição de status nos dois cálculos, no service (PB07).
+### F22 · [MEDIUM] 13 vulnerabilidades e 9 pacotes deprecated na árvore de dependências
+- **Anti-pattern:** AP22 — Dependências vulneráveis, sem uso ou sem versão fixa
+- **File:** `package.json:10-11`, `package-lock.json`
+- **Description:** `npm audit` reporta 13 vulnerabilidades (2 critical, 8 high, 1 moderate, 2 low). No caminho das requisições, via express 4.22.1: `body-parser` (DoS por bytes após corpo comprimido), `qs`, `path-to-regexp` (ReDoS com múltiplos parâmetros de rota) e `proxy-addr` (IP spoofing com trust subnet). Via sqlite3 5.1.7, em tempo de instalação: `tar`, `node-gyp`, `cacache`, `make-fetch-happen`. O lockfile marca 9 pacotes como deprecated (`tar 6.2.1`, `glob 7.2.3`, `inflight`, `rimraf 3.0.2`, `npmlog`, `gauge`, `are-we-there-yet`, `prebuild-install`, `@npmcli/move-file`). As duas dependências diretas usam faixa `^`.
+- **Impact:** A falha do `body-parser` é alcançável porque toda rota passa por `express.json()`. As de `path-to-regexp` e `proxy-addr` dependem de recursos que o projeto não usa (rota com vários parâmetros, `trust proxy`).
+- **Recommendation:** `npm audit fix` resolve a cadeia do express; a do sqlite3 exige a major 6.0.1. Nenhuma atualização é feita sem autorização: fica como pendência.
 
-### F23 · [LOW] Regras e status como literais
+### F23 · [LOW] Literais de negócio espalhados
 - **Anti-pattern:** AP26 — Números e strings mágicos
-- **File:** `src/AppManager.js:46`, `src/AppManager.js:48`, `src/AppManager.js:108`, `src/AppManager.js:21`, `src/AppManager.js:68`, `src/AppManager.js:37`, `src/utils.js:19`
-- **Description:** O prefixo de aprovação `"4"`, os status `'PAID'` e `'DENIED'` repetidos em quatro pontos, a senha padrão `"123456"`, o filtro `active = 1` e o laço de `10000` aparecem como literais.
-- **Impact:** A regra de aprovação e os status ficam espalhados, e mudar um deles exige caçar cada ocorrência.
-- **Recommendation:** Substituir por constantes nomeadas (PB15).
+- **File:** `src/AppManager.js:46`, `src/AppManager.js:48`, `src/AppManager.js:108`, `src/AppManager.js:68`, `src/utils.js:19-22`
+- **Description:** O prefixo `"4"` que aprova o cartão, os status `"PAID"` e `"DENIED"`, a senha padrão `"123456"` e os números `10000`, `2` e `10` do hash aparecem como literais.
+- **Impact:** A regra de aprovação e os status ficam implícitos e repetidos.
+- **Recommendation:** Constantes nomeadas num módulo próprio (PB15).
 
-### F24 · [LOW] Código e configuração sem uso
+### F24 · [LOW] console.log como logging
+- **Anti-pattern:** AP27 — `print`/`console.log` como logging
+- **File:** `src/utils.js:13`, `src/app.js:13`, `src/AppManager.js:45`
+- **Description:** Os três registros do projeto usam `console.log` direto, sem nível; o da linha 45 é o caso sensível tratado em F02.
+- **Impact:** Não há como filtrar por severidade nem silenciar em testes.
+- **Recommendation:** Um logger único com níveis, sobre a biblioteca padrão (PB15).
+
+### F25 · [LOW] Identificadores de uma ou duas letras
+- **Anti-pattern:** AP28 — Nomes ruins e contexto ambíguo
+- **File:** `src/AppManager.js:29-33`, `src/AppManager.js:26`, `src/AppManager.js:89`, `src/utils.js:17`
+- **Description:** `u`, `e`, `p`, `cid`, `cc`, `c` e `enr` nomeiam os dados do checkout e do relatório; `err` é redeclarado em cada nível de callback; `self = this` convive com arrow functions; a função de hash se chama `badCrypto`.
+- **Impact:** É preciso reler o corpo da requisição para entender cada variável.
+- **Recommendation:** Renomear durante a extração das camadas, mantendo os nomes dos campos do contrato (PB05, PB14).
+
+### F26 · [LOW] Exports e configurações nunca usados
 - **Anti-pattern:** AP29 — Código morto e imports não usados
 - **File:** `src/AppManager.js:2`, `src/utils.js:10`, `src/utils.js:25`, `src/utils.js:2-3`, `src/utils.js:5`
-- **Description:** Confirmado com Grep:
-  - `totalRevenue` é importado e nunca usado, e `utils.js` nunca o altera.
-  - `globalCache` é exportado e não é importado.
-  - `dbUser`, `dbPass` e `smtpUser` não são lidos.
-- **Impact:** O código sugere um faturamento acumulado e integrações que não existem.
-- **Recommendation:** Remover.
+- **Description:** `totalRevenue` é importado em `AppManager.js` e nunca referenciado; `globalCache` é exportado e nenhum arquivo o importa; `dbUser`, `dbPass` e `smtpUser` não são lidos em nenhum ponto (confirmado por Grep em `src/`).
+- **Impact:** Sugere um contador de receita e integrações que não existem.
+- **Recommendation:** Remover durante a refatoração.
 
-### F25 · [LOW] Header X-Powered-By revela a stack
-- **Anti-pattern:** AP31 — Header que revela a stack
-- **File:** `src/app.js:5-6`
-- **Description:** O app não chama `app.disable('x-powered-by')`, e o Express 4 envia `X-Powered-By: Express` por padrão.
-- **Impact:** Facilita o fingerprinting da stack e a busca por vulnerabilidades específicas, como as do F16.
-- **Recommendation:** Desabilitar o header (PB16).
-
-### F26 · [LOW] Porta e caminho do banco fixos no código
+### F27 · [LOW] Porta e banco fixos no código
 - **Anti-pattern:** AP30 — Configuração não secreta fixa no código
 - **File:** `src/utils.js:6`, `src/AppManager.js:7`
-- **Description:** `port: 3000` fica dentro do objeto de segredos, e `':memory:'` é um literal no construtor.
-- **Impact:** Trocar a porta ou o banco por ambiente exige alterar o código.
-- **Recommendation:** Ler de variáveis de ambiente, com esses valores como padrão (PB02).
+- **Description:** `port: 3000` e `':memory:'` são literais.
+- **Impact:** Mudar a porta ou usar um banco em arquivo exige editar o código.
+- **Recommendation:** Ler `PORT` e o caminho do banco do ambiente, com os valores atuais como padrão (PB02).
 
-### F27 · [LOW] `console.log` como logging
-- **Anti-pattern:** AP27 — `print`/`console.log` como logging
-- **File:** `src/utils.js:13`, `src/app.js:13`
-- **Description:** Cada checkout loga `[LOG] Salvando no cache: last_checkout_<id>`, e a mensagem de boot também usa `console.log`. O log com cartão e chave está no F02.
-- **Impact:** Não há níveis nem um ponto único para controlar o que vai para o log.
-- **Recommendation:** Centralizar num logger simples (PB15).
-
-### F28 · [LOW] Nomes de uma letra e contexto ambíguo
-- **Anti-pattern:** AP28 — Nomes ruins e contexto ambíguo
-- **File:** `src/AppManager.js:29-33`, `src/AppManager.js:26`, `src/utils.js:17`, `src/app.js:13`
-- **Description:** As variáveis internas se chamam `u`, `e`, `p`, `cid`, `cc` e `self`. Os nomes `badCrypto` e `AppManager` não dizem o que fazem, e o log de boot diz "Frankenstein LMS". Os nomes dos campos de entrada (`usr`, `eml`, `pwd`, `c_id`, `card`) são contrato e ficam como estão.
-- **Impact:** A leitura do fluxo de checkout depende de deduzir o que cada letra representa.
-- **Recommendation:** Dar nomes descritivos às variáveis internas (PB05, PB14).
+### F28 · [LOW] Header X-Powered-By ativo
+- **Anti-pattern:** AP31 — Header que revela a stack
+- **File:** `src/app.js:5-6`
+- **Description:** O app é criado sem `app.disable('x-powered-by')`.
+- **Impact:** Toda resposta anuncia o framework.
+- **Recommendation:** Desabilitar o header na criação do app (PB16).
 
 ### F29 · [LOW] Valores monetários em REAL e status em texto livre
 - **Anti-pattern:** AP32 — Modelagem de dados frágil
-- **File:** `src/AppManager.js:13`, `src/AppManager.js:15`, `src/AppManager.js:109`
-- **Description:** `courses.price` e `payments.amount` são `REAL` (ponto flutuante) e se acumulam em `courseData.revenue += payment.amount`. `payments.status` é texto sem `CHECK`, e `active` é um inteiro usado como booleano.
-- **Impact:** Somas de dinheiro acumulam erro de arredondamento, e o banco aceita qualquer status.
-- **Recommendation:** Guardar centavos em `INTEGER` e restringir os status. Isso mudaria o schema e o formato dos valores da resposta, então fica como recomendação.
+- **File:** `src/AppManager.js:13`, `src/AppManager.js:15`
+- **Description:** `courses.price` e `payments.amount` são `REAL`, somados em ponto flutuante no relatório (linha 109); `payments.status` é `TEXT` sem `CHECK`.
+- **Impact:** Somas sujeitas a erro de arredondamento e status fora de `PAID`/`DENIED` aceitos pelo banco.
+- **Recommendation:** `CHECK` no status cabe junto com F14; trocar o tipo monetário para centavos inteiros mudaria os valores do contrato e fica como pendência.
 
 ## Deprecated APIs
 
 Nenhuma API deprecated encontrada no código-fonte.
 
-Na árvore de dependências há pacotes deprecated, todos da cadeia de instalação do sqlite3: `tar@6.2.1`, `prebuild-install@7.1.3`, `glob@7.2.3`, `inflight@1.0.6`, `rimraf@3.0.2`, `npmlog@6.0.2` e outros. Ver F16.
+Há 9 pacotes deprecated na árvore de dependências: ver F22 (AP22).
 
 ```text
 ================================
