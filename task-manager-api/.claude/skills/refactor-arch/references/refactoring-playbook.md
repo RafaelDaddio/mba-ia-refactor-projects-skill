@@ -358,7 +358,7 @@ function buildProductRoutes({ productController }) {
 
 **Resolve:** AP06, AP10.
 
-O login que o projeto já tem passa a emitir um token assinado, e cada rota exige a credencial do seu nível de acesso pela regra 3 do `SKILL.md`: pública, conta autenticada, dono da conta ou administrador. O token carrega o id e o papel da conta, para que o middleware decida sem consultar o banco.
+O login que o projeto já tem passa a emitir um token assinado, e cada rota exige a credencial do seu nível de acesso pela regra 3 do `SKILL.md`: pública, conta autenticada, dono da conta ou administrador. O token só identifica a conta. A cada requisição, a conta é recarregada por uma função que a composition root injeta (do service de usuários): conta excluída ou que não passaria no login (ex.: inativa) não é aceita, e o papel considerado é o atual. Assim, excluir, desativar ou rebaixar uma conta vale na hora, sem esperar o token expirar.
 
 Python (o `itsdangerous` já vem com o Flask; o segredo é a `SECRET_KEY`):
 
@@ -367,32 +367,42 @@ Python (o `itsdangerous` já vem com o Flask; o segredo é a `SECRET_KEY`):
 import hmac
 from functools import wraps
 
-from flask import current_app, request
-from itsdangerous import BadSignature, URLSafeTimedSerializer
+from flask import current_app, g, request
+from itsdangerous import BadData, URLSafeTimedSerializer
 
 from src.utils.errors import AppError
 
 TOKEN_MAX_AGE = 8 * 3600  # segundos
 
 
+def init_auth(app, load_account):
+    """Chamada na composition root. load_account(user_id) devolve {"id", "is_admin"}
+    da conta atual, ou None se ela não existe ou não passaria no login (ex.: inativa)."""
+    app.extensions["auth_load_account"] = load_account
+
+
 def _serializer():
     return URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="auth-token")
 
 
-def issue_token(user_id, is_admin=False):
-    return _serializer().dumps({"uid": user_id, "adm": bool(is_admin)})
+def issue_token(user_id):
+    """O token só identifica a conta; papel e situação são lidos a cada requisição."""
+    return _serializer().dumps({"uid": user_id})
 
 
-def _claims():
-    """Conteúdo do token Bearer; None se ausente, adulterado ou expirado."""
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        return None
-    try:
-        claims = _serializer().loads(header[len("Bearer "):], max_age=TOKEN_MAX_AGE)
-    except BadSignature:
-        return None
-    return claims if isinstance(claims, dict) and "uid" in claims else None
+def _current_account():
+    """Conta do token Bearer, recarregada uma vez por requisição; None se não houver conta válida."""
+    if "auth_account" not in g:
+        g.auth_account = None
+        header = request.headers.get("Authorization", "")
+        if header.startswith("Bearer "):
+            try:
+                claims = _serializer().loads(header[len("Bearer "):], max_age=TOKEN_MAX_AGE)
+            except BadData:
+                claims = None
+            if isinstance(claims, dict) and "uid" in claims:
+                g.auth_account = current_app.extensions["auth_load_account"](claims["uid"])
+    return g.auth_account
 
 
 def _admin_token_ok():
@@ -402,18 +412,18 @@ def _admin_token_ok():
 
 
 def is_admin():
-    claims = _claims()
-    return _admin_token_ok() or bool(claims and claims.get("adm"))
+    account = _current_account()
+    return _admin_token_ok() or bool(account and account["is_admin"])
 
 
 def require_user():
     """Nível "conta autenticada". Devolve o id da conta (None para o token administrativo)."""
     if _admin_token_ok():
         return None
-    claims = _claims()
-    if claims is None:
+    account = _current_account()
+    if account is None:
         raise AppError("Autenticação necessária", status=401)
-    return claims["uid"]
+    return account["id"]
 
 
 def require_account_owner(user_id):
@@ -456,12 +466,24 @@ bp.add_url_rule("/users", view_func=admin_only(user_controller.list_users), meth
 bp.add_url_rule("/admin/reset-db", view_func=admin_only(admin_controller.reset_db), methods=["POST"])
 
 
+# composition root — a conta é recarregada pelo service, com as mesmas checagens do login
+init_auth(app, user_service.load_for_auth)
+
+
+# services — usuário
+def load_for_auth(self, user_id):
+    user = self.users.get(user_id)
+    if user is None or not user.active:  # a mesma condição que o login já aplica
+        return None
+    return {"id": user.id, "is_admin": user.role == "admin"}
+
+
 # controllers — nível "dono" quando a conta vem do caminho ou do corpo
 def login():
     user = auth_service.authenticate(email, password)  # mesmas validações e mensagens
     # mesmas chaves de antes; o token entra no campo que já existia ou numa chave nova
     return jsonify({"message": "Login OK", "user": serialize_user(user),
-                    "token": issue_token(user.id, user.role == "admin")}), 200
+                    "token": issue_token(user.id)}), 200
 
 
 def update_user(user_id):
@@ -499,8 +521,9 @@ function safeEqual(a, b) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-function issueToken({ userId, isAdmin = false }, secret) {
-  const claims = { uid: userId, adm: Boolean(isAdmin), exp: Date.now() + TOKEN_TTL_MS };
+// o token só identifica a conta; papel e situação são lidos a cada requisição
+function issueToken(userId, secret) {
+  const claims = { uid: userId, exp: Date.now() + TOKEN_TTL_MS };
   const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
   return `${payload}.${sign(payload, secret)}`;
 }
@@ -516,40 +539,44 @@ function verifyToken(token, secret) {
   }
 }
 
-function buildAuth({ sessionSecret, adminToken }) {
+// loadAccount(id) → Promise<{ id, isAdmin } | null>: null se a conta não existe ou não passaria
+// no login (ex.: inativa). Projeto sem login não passa loadAccount: só vale o token administrativo.
+function buildAuth({ sessionSecret, adminToken, loadAccount }) {
   const adminTokenOk = (req) => Boolean(adminToken) && safeEqual(req.get('X-Admin-Token') || '', adminToken);
-  const claimsOf = (req) => {
+  const accountOf = async (req) => {
     const header = req.get('Authorization') || '';
-    return header.startsWith('Bearer ') ? verifyToken(header.slice(7), sessionSecret) : null;
+    const claims = header.startsWith('Bearer ') ? verifyToken(header.slice(7), sessionSecret) : null;
+    return claims && loadAccount ? loadAccount(claims.uid) : null;
   };
-  const isAdmin = (req) => adminTokenOk(req) || Boolean(claimsOf(req)?.adm);
+  const unauthenticated = () => new AppError('Autenticação necessária', 401);
+  // check(account, req) devolve o erro do nível ou undefined; erros do banco seguem para o handler central
+  const level = (check) => (req, res, next) => {
+    if (adminTokenOk(req)) return next();
+    return accountOf(req).then((account) => next(check(account, req))).catch(next);
+  };
 
   return {
-    requireUser: (req, res, next) => (adminTokenOk(req) || claimsOf(req)
-      ? next()
-      : next(new AppError('Autenticação necessária', 401))),
+    requireUser: level((account) => (account ? undefined : unauthenticated())),
 
     // getUserId diz de qual conta é a operação (caminho ou corpo)
-    requireOwner: (getUserId = (req) => Number(req.params.id)) => (req, res, next) => {
-      if (isAdmin(req)) return next();
-      const claims = claimsOf(req);
-      if (!claims) return next(new AppError('Autenticação necessária', 401));
-      return claims.uid === getUserId(req) ? next() : next(new AppError('Acesso negado a esta conta', 403));
-    },
+    requireOwner: (getUserId = (req) => Number(req.params.id)) => level((account, req) => {
+      if (!account) return unauthenticated();
+      return account.isAdmin || account.id === getUserId(req)
+        ? undefined
+        : new AppError('Acesso negado a esta conta', 403);
+    }),
 
-    requireAdmin: (req, res, next) => {
-      if (isAdmin(req)) return next();
-      return claimsOf(req)
-        ? next(new AppError('Acesso restrito a administradores', 403))
-        : next(new AppError('Autenticação necessária', 401));
-    },
+    requireAdmin: level((account) => {
+      if (!account) return unauthenticated();
+      return account.isAdmin ? undefined : new AppError('Acesso restrito a administradores', 403);
+    }),
   };
 }
 
 module.exports = { buildAuth, issueToken };
 
 // uso:
-// const auth = buildAuth(config);
+// const auth = buildAuth({ ...config, loadAccount: (id) => userService.loadForAuth(id) });
 // router.delete('/users/:id', auth.requireOwner(), asyncHandler(userController.remove));
 // router.get('/admin/financial-report', auth.requireAdmin, asyncHandler(reportController.financial));
 ```
@@ -567,8 +594,9 @@ if (existing && !(await verifyPassword(password, existing.passwordHash))) {
 **Cuidados:**
 - **Níveis.** Aplique a cada rota o nível do inventário da Fase 1. Não invente papéis: restringir por papel além do que o código já define fica como recomendação.
 - **Contrato.** Caminhos, métodos e campos de entrada continuam os mesmos. O login mantém as chaves e ganha o token. Sem login no projeto, os níveis acima de "pública" aceitam só o token administrativo ou a senha conferida; não crie rotas novas. Sem credencial, 401; credencial insuficiente ou recurso desabilitado, 403. Tudo isso é mudança intencional, listada no resumo final.
-- **Ordem.** Verifique a credencial antes de validar o corpo ou consultar o banco, para não revelar se um recurso ou uma conta existe.
-- **Segredo.** O segredo de assinatura vem da configuração, sem valor fixo no código. Se faltar, o valor aleatório gerado na inicialização invalida os tokens a cada reinício; registre isso no aviso de inicialização e no resumo final. O papel gravado no token vale até ele expirar.
+- **Ordem.** Verifique a credencial antes de validar o corpo ou consultar o recurso, para não revelar se um recurso ou uma conta existe.
+- **Conta atual.** O token não guarda papel nem situação da conta. A função que recarrega a conta aplica as mesmas condições do login (ex.: conta inativa não entra) e lê o papel atual; conta excluída ou bloqueada responde 401, e conta rebaixada perde o nível administrador na requisição seguinte.
+- **Segredo.** O segredo de assinatura vem da configuração, sem valor fixo no código. Se faltar, o valor aleatório gerado na inicialização invalida os tokens a cada reinício; registre isso no aviso de inicialização e no resumo final.
 - **Papel.** O cliente não define o próprio papel: o campo `role`/`tipo` é ignorado ou exige o nível administrador, inclusive para o dono da conta.
 - **Exemplos.** Documente as variáveis no `.env.example` e atualize os exemplos de requisição que o projeto já tem (`*.http`, README) para enviar as credenciais.
 

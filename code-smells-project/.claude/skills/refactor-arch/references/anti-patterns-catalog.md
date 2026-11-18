@@ -72,9 +72,9 @@ SQL montado juntando strings com valores vindos de fora.
 
 ### AP02 — Segredos e credenciais hardcoded
 
-- **Sinais:** literais atribuídos a `SECRET_KEY`, `*_KEY`, `*_SECRET`, `*_TOKEN`, `password`, `pass`, `pwd`, `api_key`; prefixos `pk_live_`, `sk_live_`; usuário e senha de SMTP ou banco; seed que cria administrador com senha fixa e roda em qualquer ambiente; o mesmo segredo repetido em respostas ou logs. Grep: `(SECRET|KEY|TOKEN|PASS|PWD|password)\w*["']?\s*[:=]\s*["'][^"']{3,}`.
-- **Não confundir:** leitura de `os.environ`/`process.env` sem valor padrão sensível; valores de exemplo em `.env.example`; dados de teste em fixtures que não rodam fora dos testes.
-- **Correção:** PB02.
+- **Sinais:** literais atribuídos a `SECRET_KEY`, `*_KEY`, `*_SECRET`, `*_TOKEN`, `password`, `pass`, `pwd`, `api_key`; prefixos `pk_live_`, `sk_live_`; usuário e senha de SMTP ou banco; seed (no boot ou em script) que cria conta com papel administrativo e senha fixa; o mesmo segredo repetido em respostas ou logs. Grep: `(SECRET|KEY|TOKEN|PASS|PWD|password)\w*["']?\s*[:=]\s*["'][^"']{3,}`.
+- **Não confundir:** leitura de `os.environ`/`process.env` sem valor padrão sensível; valores de exemplo em `.env.example`; dados de teste em fixtures que não rodam fora dos testes; senhas de contas comuns de exemplo no seed.
+- **Correção:** PB02. A senha da conta administrativa do seed passa a vir de uma variável de ambiente (ex.: `SEED_ADMIN_PASSWORD`); sem ela, a conta é criada com senha aleatória e um aviso, porque com os níveis de acesso da regra 3 essa senha dá acesso de administrador. As contas comuns de exemplo mantêm as senhas.
 
 ### AP03 — Armazenamento inseguro de senha
 
