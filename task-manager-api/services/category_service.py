@@ -1,40 +1,44 @@
-"""Regras de categorias."""
-from utils.errors import AppError, persistence_failure
+import logging
 
-CATEGORY_NOT_FOUND = 'Categoria não encontrada'
+from models.category import Category
+from utils.errors import AppError
+
+logger = logging.getLogger(__name__)
 
 
 class CategoryService:
-    def __init__(self, categories, tasks):
+    """Regras de negócio de categorias."""
+
+    def __init__(self, categories):
         self.categories = categories
-        self.tasks = tasks
 
-    def list_categories(self, limit=None, offset=0):
-        """[(categoria, total de tasks)] com as contagens numa única consulta."""
-        counts = self.tasks.count_by_category()
-        return [(category, counts.get(category.id, 0)) for category in self.categories.list_page(limit, offset)]
+    def list_categories(self, limit, offset):
+        return self.categories.list_with_task_count(limit, offset)
 
-    def get_category(self, category_id):
-        category = self.categories.find_by_id(category_id)
+    def get(self, category_id):
+        category = self.categories.get(category_id)
         if category is None:
-            raise AppError(CATEGORY_NOT_FOUND, status=404)
+            raise AppError('Categoria não encontrada', status=404)
         return category
 
-    def create_category(self, name, description, color):
-        category = self.categories(name=name, description=description, color=color)
-        with persistence_failure('Erro ao criar categoria'):
-            category.save()
+    def create(self, fields):
+        category = Category(
+            name=fields['name'],
+            description=fields.get('description', ''),
+            color=fields.get('color', Category.DEFAULT_COLOR),
+        )
+        self.categories.save(category)
+        logger.info('Categoria criada: %s', category.id)
         return category
 
-    def update_category(self, category_id, fields):
-        category = self.get_category(category_id)
+    def update(self, category, fields):
         for name, value in fields.items():
             setattr(category, name, value)
-        with persistence_failure('Erro ao atualizar'):
-            category.save()
+        self.categories.save(category)
+        logger.info('Categoria atualizada: %s', category.id)
         return category
 
-    def delete_category(self, category_id):
-        category = self.get_category(category_id)
-        with persistence_failure('Erro ao deletar'):
-            category.delete()
+    def delete(self, category_id):
+        category = self.get(category_id)
+        self.categories.delete(category)
+        logger.info('Categoria deletada: %s', category_id)

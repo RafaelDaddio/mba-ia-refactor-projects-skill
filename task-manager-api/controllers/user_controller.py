@@ -1,131 +1,130 @@
-"""Fluxo HTTP de /users e /login."""
 from flask import jsonify, request
 
-from middlewares.auth import is_admin_request
-from models.task import Task
-from models.user import DEFAULT_ROLE, MIN_PASSWORD_LENGTH, ROLES, User
-from services.user_service import UserService
+from middlewares.auth import require_admin
 from utils.errors import AppError
-from utils.helpers import utc_now
-from utils.validators import is_valid_email, pagination, require_object
-
-# campos de task devolvidos em /users/<id>/tasks
-USER_TASK_FIELDS = ('id', 'title', 'description', 'status', 'priority', 'created_at', 'due_date')
+from utils.helpers import validate_email
+from utils.validators import json_body, pagination
 
 
-def _service():
-    return UserService(users=User, tasks=Task)
+def _user_listing(user, task_count):
+    data = user.to_dict()
+    data['task_count'] = task_count
+    return data
 
 
-# --- endpoints -------------------------------------------------------------------
-
-def list_users():
-    limit, offset = pagination(request.args)
-    users = _service().list_users(limit, offset)
-    return jsonify([{**user.to_dict(), 'task_count': task_count} for user, task_count in users]), 200
-
-
-def get_user(user_id):
-    service = _service()
-    data = service.get_user(user_id).to_dict()
-    data['tasks'] = [task.to_dict() for task in service.list_user_tasks(user_id)]
-    return jsonify(data), 200
+def _task_summary(task):
+    return {
+        'id': task.id,
+        'title': task.title,
+        'description': task.description,
+        'status': task.status,
+        'priority': task.priority,
+        'created_at': str(task.created_at),
+        'due_date': str(task.due_date) if task.due_date else None,
+        'overdue': task.is_overdue(),
+    }
 
 
-def create_user():
-    data = require_object(request.get_json())
-    name = data.get('name')
-    email = data.get('email')
-    password = data.get('password')
-    role = data.get('role', DEFAULT_ROLE)
+def _parse_name(value):
+    if not value:
+        raise AppError('Nome é obrigatório', status=400)
+    if not isinstance(value, str):
+        raise AppError('Nome inválido', status=400)
+    return value
 
+
+def _parse_email(value):
+    if not isinstance(value, str) or not validate_email(value):
+        raise AppError('Email inválido', status=400)
+    return value
+
+
+def _parse_password(value):
+    if not isinstance(value, str):
+        raise AppError('Senha inválida', status=400)
+    return value
+
+
+def _parse_role(value):
+    if not isinstance(value, str):
+        raise AppError('Role inválido', status=400)
+    return value
+
+
+def _parse_new_user(data):
+    name, email, password = data.get('name'), data.get('email'), data.get('password')
     if not name:
-        raise AppError('Nome é obrigatório')
+        raise AppError('Nome é obrigatório', status=400)
     if not email:
-        raise AppError('Email é obrigatório')
+        raise AppError('Email é obrigatório', status=400)
     if not password:
-        raise AppError('Senha é obrigatória')
-    if not isinstance(name, str):
-        raise AppError('Nome inválido')
-    if not is_valid_email(email):
-        raise AppError('Email inválido')
-    if not isinstance(password, str):
-        raise AppError('Senha inválida')
-    if len(password) < MIN_PASSWORD_LENGTH:
-        raise AppError(f'Senha deve ter no mínimo {MIN_PASSWORD_LENGTH} caracteres')
-    if role not in ROLES:
-        raise AppError('Role inválido')
-
-    user = _service().create_user(name, email, password, role, actor_is_admin=is_admin_request())
-    return jsonify(user.to_dict()), 201
+        raise AppError('Senha é obrigatória', status=400)
+    fields = {
+        'name': _parse_name(name),
+        'email': _parse_email(email),
+        'password': _parse_password(password),
+    }
+    if 'role' in data:
+        fields['role'] = _parse_role(data['role'])
+    return fields
 
 
-def update_user(user_id):
-    service = _service()
-    service.get_user(user_id)  # 404 antes de validar o corpo, como antes
-    fields = _user_changes(require_object(request.get_json()))
-    user = service.update_user(user_id, fields, actor_is_admin=is_admin_request())
-    return jsonify(user.to_dict()), 200
-
-
-def delete_user(user_id):
-    _service().delete_user(user_id)
-    return jsonify({'message': 'Usuário deletado com sucesso'}), 200
-
-
-def get_user_tasks(user_id):
-    limit, offset = pagination(request.args)
-    now = utc_now()
-    result = []
-    for task in _service().list_user_tasks(user_id, limit, offset):
-        full = task.to_dict()
-        item = {field: full[field] for field in USER_TASK_FIELDS}
-        item['overdue'] = task.is_overdue(now)
-        result.append(item)
-    return jsonify(result), 200
-
-
-def login():
-    data = require_object(request.get_json())
-    email = data.get('email')
-    password = data.get('password')
-    if not email or not password or not isinstance(email, str) or not isinstance(password, str):
-        raise AppError('Email e senha são obrigatórios')
-
-    user, token = _service().login(email, password)
-    return jsonify({
-        'message': 'Login realizado com sucesso',
-        'user': user.to_dict(),
-        'token': token,
-    }), 200
-
-
-# --- validação da entrada --------------------------------------------------------
-
-def _user_changes(data):
+def _parse_user_changes(data):
+    """Mesmas regras do cadastro, só para os campos enviados."""
     fields = {}
     if 'name' in data:
-        if not data['name']:
-            raise AppError('Nome é obrigatório')
-        if not isinstance(data['name'], str):
-            raise AppError('Nome inválido')
-        fields['name'] = data['name']
+        fields['name'] = _parse_name(data['name'])
     if 'email' in data:
-        if not is_valid_email(data['email']):
-            raise AppError('Email inválido')
-        fields['email'] = data['email']
+        fields['email'] = _parse_email(data['email'])
     if 'password' in data:
-        if not isinstance(data['password'], str):
-            raise AppError('Senha inválida')
-        if len(data['password']) < MIN_PASSWORD_LENGTH:
-            raise AppError('Senha muito curta')
-        fields['password'] = data['password']
+        fields['password'] = _parse_password(data['password'])
     if 'role' in data:
-        if data['role'] not in ROLES:
-            raise AppError('Role inválido')
-        fields['role'] = data['role']
+        fields['role'] = _parse_role(data['role'])
     if 'active' in data:
         if not isinstance(data['active'], bool):
-            raise AppError('Active inválido')
+            raise AppError('Campo active deve ser booleano', status=400)
         fields['active'] = data['active']
     return fields
+
+
+class UserController:
+    def __init__(self, user_service):
+        self.users = user_service
+
+    def list_users(self):
+        limit, offset = pagination(request.args)
+        rows = self.users.list_users(limit, offset)
+        return jsonify([_user_listing(user, task_count) for user, task_count in rows]), 200
+
+    def get_user(self, user_id):
+        user = self.users.get(user_id)
+        limit, offset = pagination(request.args)
+        data = user.to_dict()
+        data['tasks'] = [task.to_dict() for task in self.users.tasks_of(user, limit, offset)]
+        return jsonify(data), 200
+
+    def create_user(self):
+        data = json_body(request)
+        # o cliente não define o próprio papel: só um administrador cadastra com papel diferente do padrão
+        if 'role' in data and self.users.changes_role(data['role']):
+            require_admin()
+        user = self.users.create(_parse_new_user(data))
+        return jsonify(user.to_dict()), 201
+
+    def update_user(self, user_id):
+        user = self.users.get(user_id)
+        data = json_body(request)
+        # mudar o papel exige administrador, inclusive para o dono da conta
+        if 'role' in data and self.users.changes_role(data['role'], user.role):
+            require_admin()
+        user = self.users.update(user, _parse_user_changes(data))
+        return jsonify(user.to_dict()), 200
+
+    def delete_user(self, user_id):
+        self.users.delete(user_id)
+        return jsonify({'message': 'Usuário deletado com sucesso'}), 200
+
+    def get_user_tasks(self, user_id):
+        user = self.users.get(user_id)
+        limit, offset = pagination(request.args)
+        return jsonify([_task_summary(task) for task in self.users.tasks_of(user, limit, offset)]), 200

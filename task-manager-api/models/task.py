@@ -1,35 +1,25 @@
-"""Model de tasks: entidade, serialização e consultas."""
-from sqlalchemy import case, func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
-from database import commit, db
-from utils.helpers import format_date, utc_now
-
-STATUSES = ('pending', 'in_progress', 'done', 'cancelled')
-DEFAULT_STATUS = 'pending'
-DONE_STATUS = 'done'
-CLOSED_STATUSES = ('done', 'cancelled')  # tasks nesses status nunca ficam atrasadas
-MIN_PRIORITY = 1
-MAX_PRIORITY = 5
-DEFAULT_PRIORITY = 3
-MIN_TITLE_LENGTH = 3
-MAX_TITLE_LENGTH = 200
-TAG_SEPARATOR = ','
-
-
-def _paginate(stmt, limit, offset):
-    if limit is not None:
-        stmt = stmt.limit(limit)
-    if offset:
-        stmt = stmt.offset(offset)
-    return stmt
+from database import db
+from utils.time import utc_now
 
 
 class Task(db.Model):
     __tablename__ = 'tasks'
 
+    VALID_STATUSES = ('pending', 'in_progress', 'done', 'cancelled')
+    CLOSED_STATUSES = ('done', 'cancelled')
+    DONE_STATUS = 'done'
+    DEFAULT_STATUS = 'pending'
+    MIN_PRIORITY = 1
+    MAX_PRIORITY = 5
+    DEFAULT_PRIORITY = 3
+    MIN_TITLE_LENGTH = 3
+    MAX_TITLE_LENGTH = 200
+
     id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(MAX_TITLE_LENGTH), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, nullable=True)
     status = db.Column(db.String(50), default=DEFAULT_STATUS)
     priority = db.Column(db.Integer, default=DEFAULT_PRIORITY)
@@ -54,113 +44,105 @@ class Task(db.Model):
             'category_id': self.category_id,
             'created_at': str(self.created_at),
             'updated_at': str(self.updated_at),
-            'due_date': format_date(self.due_date),
-            'tags': self.tags.split(TAG_SEPARATOR) if self.tags else [],
+            'due_date': str(self.due_date) if self.due_date else None,
+            'tags': self.tags.split(',') if self.tags else [],
         }
 
-    def set_tags(self, tags):
-        """Lista de tags vira texto separado por vírgula; texto ou None são gravados como vieram."""
-        self.tags = TAG_SEPARATOR.join(tags) if isinstance(tags, list) else tags
+    @classmethod
+    def validate_status(cls, new_status):
+        return new_status in cls.VALID_STATUSES
+
+    @classmethod
+    def validate_priority(cls, priority):
+        return cls.MIN_PRIORITY <= priority <= cls.MAX_PRIORITY
 
     def is_overdue(self, now=None):
         if not self.due_date:
             return False
-        now = now or utc_now()
-        return self.due_date < now and self.status not in CLOSED_STATUSES
+        if self.status in self.CLOSED_STATUSES:
+            return False
+        return self.due_date < (now or utc_now())
 
-    @classmethod
-    def overdue_clause(cls, now):
-        """Mesma regra de `is_overdue`, em SQL."""
-        return db.and_(
-            cls.due_date.is_not(None),
-            cls.due_date < now,
-            db.or_(cls.status.is_(None), cls.status.not_in(CLOSED_STATUSES)),
+
+class TaskRepository:
+    """Acesso a dados de tasks."""
+
+    def __init__(self, session):
+        self.session = session
+
+    def get(self, task_id):
+        return self.session.get(Task, task_id)
+
+    def list_with_relations(self, limit, offset):
+        """Tasks com usuário e categoria já carregados (sem uma consulta por linha)."""
+        query = (
+            select(Task)
+            .options(selectinload(Task.user), selectinload(Task.category))
+            .order_by(Task.id)
+            .limit(limit)
+            .offset(offset)
         )
+        return self.session.execute(query).scalars().all()
 
-    # --- consultas -------------------------------------------------------------
-
-    @classmethod
-    def find_by_id(cls, task_id):
-        return db.session.get(cls, task_id)
-
-    @classmethod
-    def list_with_relations(cls, limit=None, offset=0):
-        stmt = (
-            select(cls)
-            .options(selectinload(cls.user), selectinload(cls.category))
-            .order_by(cls.id)
-        )
-        return db.session.execute(_paginate(stmt, limit, offset)).scalars().all()
-
-    @classmethod
-    def search(cls, text=None, status=None, priority=None, user_id=None, limit=None, offset=0):
-        stmt = select(cls)
-        if text:
-            pattern = f'%{text}%'
-            stmt = stmt.where(db.or_(cls.title.like(pattern), cls.description.like(pattern)))
+    def search(self, term, status, priority, user_id, limit, offset):
+        query = select(Task)
+        if term:
+            pattern = f'%{term}%'
+            query = query.where(or_(Task.title.like(pattern), Task.description.like(pattern)))
         if status:
-            stmt = stmt.where(cls.status == status)
+            query = query.where(Task.status == status)
         if priority is not None:
-            stmt = stmt.where(cls.priority == priority)
+            query = query.where(Task.priority == priority)
         if user_id is not None:
-            stmt = stmt.where(cls.user_id == user_id)
-        stmt = _paginate(stmt.order_by(cls.id), limit, offset)
-        return db.session.execute(stmt).scalars().all()
+            query = query.where(Task.user_id == user_id)
+        query = query.order_by(Task.id).limit(limit).offset(offset)
+        return self.session.execute(query).scalars().all()
 
-    @classmethod
-    def find_by_user(cls, user_id, limit=None, offset=0):
-        stmt = select(cls).where(cls.user_id == user_id).order_by(cls.id)
-        return db.session.execute(_paginate(stmt, limit, offset)).scalars().all()
+    def list_by_user(self, user_id, limit=None, offset=0):
+        query = select(Task).where(Task.user_id == user_id).order_by(Task.id)
+        if limit is not None:
+            query = query.limit(limit).offset(offset)
+        return self.session.execute(query).scalars().all()
 
-    @classmethod
-    def find_overdue(cls, now):
-        stmt = select(cls).where(cls.overdue_clause(now)).order_by(cls.id)
-        return db.session.execute(stmt).scalars().all()
+    def count_all(self):
+        return self.session.execute(select(func.count(Task.id))).scalar_one()
 
-    @classmethod
-    def count_all(cls):
-        return db.session.scalar(select(func.count(cls.id)))
+    def count_by_status(self):
+        rows = self.session.execute(select(Task.status, func.count(Task.id)).group_by(Task.status))
+        return {status: count for status, count in rows}
 
-    @classmethod
-    def count_overdue(cls, now):
-        return db.session.scalar(select(func.count(cls.id)).where(cls.overdue_clause(now)))
+    def count_by_priority(self):
+        rows = self.session.execute(select(Task.priority, func.count(Task.id)).group_by(Task.priority))
+        return {priority: count for priority, count in rows}
 
-    @classmethod
-    def count_by_status(cls):
-        rows = db.session.execute(select(cls.status, func.count(cls.id)).group_by(cls.status))
-        return dict(rows.all())
+    @staticmethod
+    def _overdue_filter(now):
+        # mesma regra de Task.is_overdue, aplicada no banco
+        return (Task.due_date < now, Task.status.notin_(Task.CLOSED_STATUSES))
 
-    @classmethod
-    def count_by_priority(cls):
-        rows = db.session.execute(select(cls.priority, func.count(cls.id)).group_by(cls.priority))
-        return dict(rows.all())
+    def count_overdue(self, now):
+        query = select(func.count(Task.id)).where(*self._overdue_filter(now))
+        return self.session.execute(query).scalar_one()
 
-    @classmethod
-    def count_by_category(cls):
-        rows = db.session.execute(select(cls.category_id, func.count(cls.id)).group_by(cls.category_id))
-        return dict(rows.all())
+    def list_overdue(self, now):
+        query = select(Task).where(*self._overdue_filter(now)).order_by(Task.id)
+        return self.session.execute(query).scalars().all()
 
-    @classmethod
-    def count_by_user(cls):
-        """{user_id: (total de tasks, tasks concluídas)} numa única consulta."""
-        done = func.sum(case((cls.status == DONE_STATUS, 1), else_=0))
-        rows = db.session.execute(select(cls.user_id, func.count(cls.id), done).group_by(cls.user_id))
-        return {user_id: (total, completed or 0) for user_id, total, completed in rows}
+    def count_created_since(self, since):
+        query = select(func.count(Task.id)).where(Task.created_at >= since)
+        return self.session.execute(query).scalar_one()
 
-    @classmethod
-    def count_recent_activity(cls, since):
-        """(tasks criadas desde `since`, tasks concluídas e atualizadas desde `since`)."""
-        created = func.sum(case((cls.created_at >= since, 1), else_=0))
-        completed = func.sum(case((db.and_(cls.status == DONE_STATUS, cls.updated_at >= since), 1), else_=0))
-        row = db.session.execute(select(created, completed)).one()
-        return row[0] or 0, row[1] or 0
+    def count_done_updated_since(self, since):
+        query = select(func.count(Task.id)).where(
+            Task.status == Task.DONE_STATUS, Task.updated_at >= since
+        )
+        return self.session.execute(query).scalar_one()
 
-    # --- escrita -----------------------------------------------------------------
+    def save(self, task):
+        self.session.add(task)
+        self.session.commit()
+        return task
 
-    def save(self):
-        db.session.add(self)
-        commit()
-
-    def delete(self):
-        db.session.delete(self)
-        commit()
+    def delete(self, task):
+        self.session.delete(task)
+        self.session.commit()

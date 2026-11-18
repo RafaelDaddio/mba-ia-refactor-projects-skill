@@ -1,29 +1,22 @@
-"""Extensão do banco, criação do schema e commit transacional."""
-import logging
+import sqlite3
 
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.exc import SQLAlchemyError
-
-from utils.errors import PersistenceError
-
-logger = logging.getLogger(__name__)
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 
 db = SQLAlchemy()
 
 
-def init_db(app):
-    """Liga o banco à aplicação e cria as tabelas que ainda não existem."""
-    db.init_app(app)
-    import models  # noqa: F401 — registra os models antes do create_all
+@event.listens_for(Engine, 'connect')
+def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+    """O SQLite só aplica as chaves estrangeiras declaradas quando o PRAGMA é ligado por conexão."""
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        cursor = dbapi_connection.cursor()
+        cursor.execute('PRAGMA foreign_keys=ON')
+        cursor.close()
 
+
+def init_db(app):
+    db.init_app(app)
     with app.app_context():
         db.create_all()
-
-
-def commit():
-    try:
-        db.session.commit()
-    except SQLAlchemyError as exc:
-        db.session.rollback()
-        logger.exception("Falha ao gravar no banco")
-        raise PersistenceError(str(exc)) from exc

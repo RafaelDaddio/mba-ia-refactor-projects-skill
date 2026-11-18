@@ -1,13 +1,21 @@
 """Script para popular o banco com dados iniciais"""
-from app import app, db
+import secrets
+from datetime import timedelta
+
+from app import app, db, settings
 from models.task import Task
 from models.user import User
 from models.category import Category
-from datetime import timedelta
-
-from utils.helpers import utc_now
+from utils.time import utc_now
 
 def seed_data():
+    # a senha da conta administrativa vem do ambiente; sem ela, é aleatória e não é exibida
+    admin_password = settings.seed_admin_password
+    if not admin_password:
+        admin_password = secrets.token_urlsafe(16)
+        print('AVISO: SEED_ADMIN_PASSWORD não definida; a conta admin (joao@email.com) recebeu uma '
+              'senha aleatória. Defina a variável e rode o seed de novo para escolher a senha.')
+
     with app.app_context():
 
         Task.query.delete()
@@ -18,7 +26,7 @@ def seed_data():
         u1 = User()
         u1.name = 'João Silva'
         u1.email = 'joao@email.com'
-        u1.set_password('1234')
+        u1.set_password(admin_password)
         u1.role = 'admin'
         db.session.add(u1)
 

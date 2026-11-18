@@ -1,94 +1,82 @@
-"""Regras de usuários: cadastro, atualização, exclusão e login."""
 import logging
 
-from models.user import DEFAULT_ROLE
-from utils.errors import AppError, PersistenceError, persistence_failure
+from models.user import User
+from utils.errors import AppError
 
 logger = logging.getLogger(__name__)
 
-USER_NOT_FOUND = 'Usuário não encontrado'
-# Token de fachada mantido por contrato; autenticação real é pendência (F05).
-TOKEN_PREFIX = 'fake-jwt-token-'
-
 
 class UserService:
+    """Regras de negócio de usuários."""
+
     def __init__(self, users, tasks):
         self.users = users
         self.tasks = tasks
 
-    def list_users(self, limit=None, offset=0):
-        """[(usuário, total de tasks)] com as contagens numa única consulta."""
-        counts = self.tasks.count_by_user()
-        return [(user, counts.get(user.id, (0, 0))[0]) for user in self.users.list_page(limit, offset)]
+    def list_users(self, limit, offset):
+        return self.users.list_with_task_count(limit, offset)
 
-    def get_user(self, user_id):
-        user = self.users.find_by_id(user_id)
+    def get(self, user_id):
+        user = self.users.get(user_id)
         if user is None:
-            raise AppError(USER_NOT_FOUND, status=404)
+            raise AppError('Usuário não encontrado', status=404)
         return user
 
-    def list_user_tasks(self, user_id, limit=None, offset=0):
-        self.get_user(user_id)
-        return self.tasks.find_by_user(user_id, limit, offset)
+    def tasks_of(self, user, limit, offset):
+        return self.tasks.list_by_user(user.id, limit, offset)
 
-    def create_user(self, name, email, password, role, actor_is_admin):
-        if self.users.find_by_email(email) is not None:
-            raise AppError('Email já cadastrado', status=409)
-        self._check_role_assignment(role, current_role=DEFAULT_ROLE, actor_is_admin=actor_is_admin)
+    @staticmethod
+    def changes_role(requested_role, current_role=User.DEFAULT_ROLE):
+        """Diz se o papel pedido difere do atual (ou do padrão, no cadastro)."""
+        return requested_role != current_role
 
-        user = self.users(name=name, email=email, role=role)
-        user.set_password(password)
-        with persistence_failure('Erro ao criar usuário'):
-            user.save()
+    def create(self, fields):
+        self._check_password(
+            fields['password'], f'Senha deve ter no mínimo {User.MIN_PASSWORD_LENGTH} caracteres'
+        )
+        self._check_email_available(fields['email'])
+        role = fields.get('role', User.DEFAULT_ROLE)
+        self._check_role(role)
+
+        user = User(name=fields['name'], email=fields['email'], role=role)
+        user.set_password(fields['password'])
+        self.users.save(user)
         logger.info('Usuário criado: %s', user.id)
         return user
 
-    def update_user(self, user_id, fields, actor_is_admin):
-        user = self.get_user(user_id)
+    def update(self, user, fields):
         if 'email' in fields:
-            existing = self.users.find_by_email(fields['email'])
-            if existing is not None and existing.id != user_id:
-                raise AppError('Email já cadastrado', status=409)
+            self._check_email_available(fields['email'], ignore_id=user.id)
+        if 'password' in fields:
+            self._check_password(fields['password'], 'Senha muito curta')
         if 'role' in fields:
-            self._check_role_assignment(fields['role'], current_role=user.role, actor_is_admin=actor_is_admin)
+            self._check_role(fields['role'])
 
         for name in ('name', 'email', 'role', 'active'):
             if name in fields:
                 setattr(user, name, fields[name])
         if 'password' in fields:
             user.set_password(fields['password'])
-
-        with persistence_failure('Erro ao atualizar'):
-            user.save()
+        self.users.save(user)
+        logger.info('Usuário atualizado: %s', user.id)
         return user
 
-    def delete_user(self, user_id):
-        user = self.get_user(user_id)
-        with persistence_failure('Erro ao deletar'):
-            user.delete_with_tasks()
+    def delete(self, user_id):
+        user = self.get(user_id)
+        self.users.delete_with_tasks(user)
         logger.info('Usuário deletado: %s', user_id)
 
-    def login(self, email, password):
-        user = self.users.find_by_email(email)
-        if user is None or not user.check_password(password):
-            raise AppError('Credenciais inválidas', status=401)
-        if not user.active:
-            raise AppError('Usuário inativo', status=403)
-        if user.has_legacy_password_hash():
-            self._upgrade_password_hash(user, password)
-        return user, f'{TOKEN_PREFIX}{user.id}'
+    @staticmethod
+    def _check_password(password, message):
+        if len(password) < User.MIN_PASSWORD_LENGTH:
+            raise AppError(message, status=400)
 
     @staticmethod
-    def _check_role_assignment(role, current_role, actor_is_admin):
-        """O próprio cliente não escolhe um papel privilegiado nem troca o papel de alguém."""
-        if role != current_role and not actor_is_admin:
-            raise AppError('Acesso administrativo negado', status=401)
+    def _check_role(role):
+        if role not in User.VALID_ROLES:
+            raise AppError('Role inválido', status=400)
 
-    @staticmethod
-    def _upgrade_password_hash(user, password):
-        """Regrava hashes MD5 antigos no formato atual após um login bem-sucedido."""
-        user.set_password(password)
-        try:
-            user.save()
-        except PersistenceError:
-            logger.warning('Não foi possível atualizar o hash de senha do usuário %s', user.id)
+    def _check_email_available(self, email, ignore_id=None):
+        existing = self.users.find_by_email(email)
+        if existing is not None and existing.id != ignore_id:
+            raise AppError('Email já cadastrado', status=409)

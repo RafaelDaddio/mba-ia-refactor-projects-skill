@@ -1,4 +1,4 @@
-"""Tratamento de erros centralizado: toda falha sai como JSON {"error": ...}."""
+"""Tratamento de erros centralizado: toda falha sai como {"error": mensagem}."""
 import logging
 
 from flask import jsonify
@@ -7,7 +7,14 @@ from werkzeug.exceptions import HTTPException
 from utils.errors import AppError
 
 logger = logging.getLogger(__name__)
+
 ERROR_KEY = 'error'
+HTTP_MESSAGES = {
+    400: 'Requisição inválida',
+    404: 'Recurso não encontrado',
+    405: 'Método não permitido',
+    415: 'Content-Type deve ser application/json',
+}
 
 
 def _error(message, status):
@@ -21,11 +28,7 @@ def register_error_handlers(app):
 
     @app.errorhandler(HTTPException)
     def handle_http_error(err):
-        response, status = _error(err.description, err.code)
-        for header, value in err.get_headers():
-            if header.lower() != 'content-type':  # preserva, por exemplo, o Allow do 405
-                response.headers[header] = value
-        return response, status
+        return _error(HTTP_MESSAGES.get(err.code, err.description), err.code)
 
     @app.errorhandler(Exception)
     def handle_unexpected(err):

@@ -1,3 +1,3 @@
-from models.task import Task
-from models.user import User
-from models.category import Category
+from models.task import Task, TaskRepository
+from models.user import User, UserRepository
+from models.category import Category, CategoryRepository

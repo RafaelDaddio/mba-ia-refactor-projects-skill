@@ -1,13 +1,18 @@
 from flask import Blueprint
 
-from controllers import user_controller
+from middlewares.auth import admin_only, owner_only
 
-bp = Blueprint('users', __name__)
 
-bp.add_url_rule('/users', view_func=user_controller.list_users, methods=['GET'])
-bp.add_url_rule('/users', view_func=user_controller.create_user, methods=['POST'])
-bp.add_url_rule('/users/<int:user_id>', view_func=user_controller.get_user, methods=['GET'])
-bp.add_url_rule('/users/<int:user_id>', view_func=user_controller.update_user, methods=['PUT'])
-bp.add_url_rule('/users/<int:user_id>', view_func=user_controller.delete_user, methods=['DELETE'])
-bp.add_url_rule('/users/<int:user_id>/tasks', view_func=user_controller.get_user_tasks, methods=['GET'])
-bp.add_url_rule('/login', view_func=user_controller.login, methods=['POST'])
+def create_blueprint(controller):
+    bp = Blueprint('users', __name__)
+    # administrador: reúne dados de todas as contas
+    bp.add_url_rule('/users', view_func=admin_only(controller.list_users), methods=['GET'])
+    # pública: cadastro (definir `role` exige administrador, conferido no controller)
+    bp.add_url_rule('/users', view_func=controller.create_user, methods=['POST'])
+    # dono da conta ou administrador
+    bp.add_url_rule('/users/<int:user_id>', view_func=owner_only(controller.get_user), methods=['GET'])
+    bp.add_url_rule('/users/<int:user_id>', view_func=owner_only(controller.update_user), methods=['PUT'])
+    bp.add_url_rule('/users/<int:user_id>', view_func=owner_only(controller.delete_user), methods=['DELETE'])
+    # pública: tasks atribuídas não pertencem à conta e saem sem dados pessoais
+    bp.add_url_rule('/users/<int:user_id>/tasks', view_func=controller.get_user_tasks, methods=['GET'])
+    return bp

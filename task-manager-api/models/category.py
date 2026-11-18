@@ -1,14 +1,14 @@
-"""Model de categorias: entidade, serialização e consultas."""
 from sqlalchemy import func, select
 
-from database import commit, db
-from utils.helpers import utc_now
-
-DEFAULT_COLOR = '#000000'
+from database import db
+from models.task import Task
+from utils.time import utc_now
 
 
 class Category(db.Model):
     __tablename__ = 'categories'
+
+    DEFAULT_COLOR = '#000000'
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -25,32 +25,36 @@ class Category(db.Model):
             'created_at': str(self.created_at),
         }
 
-    # --- consultas -------------------------------------------------------------
 
-    @classmethod
-    def find_by_id(cls, category_id):
-        return db.session.get(cls, category_id)
+class CategoryRepository:
+    """Acesso a dados de categorias."""
 
-    @classmethod
-    def list_page(cls, limit=None, offset=0):
-        stmt = select(cls).order_by(cls.id)
-        if limit is not None:
-            stmt = stmt.limit(limit)
-        if offset:
-            stmt = stmt.offset(offset)
-        return db.session.execute(stmt).scalars().all()
+    def __init__(self, session):
+        self.session = session
 
-    @classmethod
-    def count_all(cls):
-        return db.session.scalar(select(func.count(cls.id)))
+    def get(self, category_id):
+        return self.session.get(Category, category_id)
 
-    # --- escrita -----------------------------------------------------------------
+    def count_all(self):
+        return self.session.execute(select(func.count(Category.id))).scalar_one()
 
-    def save(self):
-        db.session.add(self)
-        commit()
+    def list_with_task_count(self, limit, offset):
+        """Pares (categoria, quantidade de tasks) numa única consulta."""
+        query = (
+            select(Category, func.count(Task.id))
+            .outerjoin(Task, Task.category_id == Category.id)
+            .group_by(Category.id)
+            .order_by(Category.id)
+            .limit(limit)
+            .offset(offset)
+        )
+        return self.session.execute(query).all()
 
-    def delete(self):
-        # tasks da categoria ficam sem categoria (category_id = NULL), como antes
-        db.session.delete(self)
-        commit()
+    def save(self, category):
+        self.session.add(category)
+        self.session.commit()
+        return category
+
+    def delete(self, category):
+        self.session.delete(category)
+        self.session.commit()

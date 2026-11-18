@@ -1,5 +1,4 @@
-"""Endpoints de status da API."""
-import datetime
+from datetime import datetime
 
 from flask import jsonify
 
@@ -8,7 +7,7 @@ API_VERSION = '1.0'
 
 
 def health():
-    return jsonify({'status': 'ok', 'timestamp': str(datetime.datetime.now())}), 200
+    return jsonify({'status': 'ok', 'timestamp': str(datetime.now())}), 200
 
 
 def index():
