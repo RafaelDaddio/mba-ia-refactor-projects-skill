@@ -168,9 +168,9 @@ O **`validation.md`** detalha procedimentos como subir a aplicação, montar o p
 
 **Regras no topo.** O `SKILL.md` começa pelas regras que valem em todas as fases, como não alterar nada antes da confirmação e preservar o contrato dos endpoints, para que sejam lidas antes de qualquer instrução específica.
 
-**Comparar em vez de checar "200".** Saber que um endpoint responde não diz se ele responde como antes. Com o baseline gravado, toda diferença depois da refatoração precisa ser uma mudança intencional: dado sensível removido, rota administrativa protegida, 4xx no lugar de 500 para entrada inválida, formato de erro padronizado.
+**Comparar em vez de checar "200".** Saber que um endpoint responde não diz se ele responde como antes. Com o baseline gravado, toda diferença depois da refatoração precisa ser uma mudança intencional: dado sensível removido, rota protegida pelo seu nível de acesso, 4xx no lugar de 500 para entrada inválida, formato de erro padronizado.
 
-**Segurança sem quebrar clientes.** Só as rotas administrativas passam a exigir um token definido em variável de ambiente: as que o projeto já marca como administrativas (`admin` no caminho ou no handler) e as que destroem dados globalmente. Endpoints que executam SQL recebido ficam desligados por padrão. As demais rotas não ganham autenticação, porque isso quebraria quem já as usa; a ausência fica registrada como pendência. Nenhuma dependência nova é instalada.
+**Níveis de acesso sem mudar o contrato.** Cada rota recebe um nível: pública (cadastro, login, health e leituras sem dados pessoais), conta autenticada, dono da conta ou administrador. O login que o projeto já tem passa a emitir um token assinado, no campo de token que já existe ou numa chave nova; caminhos, métodos e campos de entrada continuam os mesmos. O token só identifica a conta: a cada requisição, a conta é recarregada, para que desativar, rebaixar ou excluir valha na hora. Sem login no projeto, a skill não cria rotas: aceita o token administrativo da configuração ou a senha que a rota já recebe. Endpoints que executam SQL recebido ficam desligados por padrão, e nenhuma dependência nova é instalada.
 
 **Sem regras de negócio novas.** A skill só corrige um comportamento quando o próprio código expressa a regra (um log que anuncia uma ação não executada, um estado que um cálculo ignora) ou quando ele corrompe dados (estoque negativo, e-mail duplicado usado no login). Restrições que o código não expressa, como as transições de status permitidas, ficam como recomendação.
 
@@ -207,7 +207,13 @@ Cada entrada descreve sinais de detecção (como "query dentro de `for`"), falso
 
 **Escala de severidade incompleta.** Dependências vulneráveis, headers de resposta e modelagem de dados não se encaixam na escala do enunciado. Esses casos são classificados pelo impacto observado em cada projeto.
 
-**Calibrar o que a skill pode mudar.** Na primeira execução no projeto 1, a skill protegeu rotas comuns e criou regras de negócio que o código não tinha. Na segunda, com uma regra mais restritiva, deixou de corrigir erros evidentes. A solução foi definir de forma objetiva o que é rota administrativa e quais evidências permitem corrigir um comportamento. As três execuções estão descritas na seção C.
+**Calibrar o que a skill pode mudar.** Na primeira execução no projeto 1, a skill escolheu sem critério objetivo quais rotas proteger e criou regras de negócio que o código não tinha. Na segunda, com uma regra mais restritiva, deixou de corrigir erros evidentes. A solução foi definir de forma objetiva o que é rota administrativa e quais evidências permitem corrigir um comportamento. As execuções estão descritas na seção C.
+
+**Autenticação deixada como pendência.** A primeira entrega só protegia rotas administrativas e deixava a autenticação geral como pendência, para não mudar o contrato. A revisão mostrou o custo: no projeto 3, qualquer cliente trocava a senha de outra conta. A primeira correção protegeu só as rotas de identidade, e as escritas e listagens gerais continuariam públicas. A solução foi dar a cada rota um nível de acesso e fazer o login existente emitir um token assinado, sem mudar caminhos nem campos.
+
+**Token que guardava o papel.** No projeto 3, a validação mostrou que uma conta rebaixada de `admin` continuava excluindo outras contas, porque o token levava o papel até expirar. A skill tratava isso como regra nova, mas o próprio código já dizia que conta inativa não entra e que só o `admin` administra. O PB06 passou a recarregar a conta a cada requisição, e o token ficou só com o id.
+
+**Senha do administrador no seed.** O catálogo só tratava como segredo o seed que roda sozinho no boot. No projeto 3, o seed é um script manual, e a skill manteve a senha `1234` da conta `admin`. Com os níveis de acesso, essa senha pública virava acesso de administrador. O AP02 passou a cobrir qualquer seed que cria conta administrativa: a senha vem de `SEED_ADMIN_PASSWORD`, e as contas comuns de exemplo mantêm as suas.
 
 **Auditoria de dependências sem ferramenta.** O `pip-audit` não faz parte dos projetos Python, e a skill não instala pacotes. Sem ele, ela não tem como confirmar vulnerabilidades, então registra a auditoria como recomendação em vez de citar falhas de memória.
 
@@ -219,15 +225,17 @@ Cada entrada descreve sinais de detecção (como "query dentro de `for`"), falso
 
 ## C) Resultados
 
-A skill foi desenvolvida rodando no projeto 1: cada execução revelou um comportamento a corrigir nos arquivos de referência, até chegar à versão final. A mesma versão foi então aplicada aos projetos 2 e 3.
+A skill foi desenvolvida rodando no projeto 1: cada execução revelou um comportamento a corrigir nos arquivos de referência. Depois da regra de níveis de acesso, a versão foi aplicada aos projetos 2 e 3. O projeto 3 revelou duas lacunas de autenticação; com elas corrigidas, os projetos 1 e 3 foram refeitos do zero com a versão final. O projeto 2 não tem login nem papel de administrador, então os dois ajustes não o afetam.
 
 ### Resumo das auditorias
 
 | Projeto | CRITICAL | HIGH | MEDIUM | LOW | Total | Resolvidos na Fase 3 |
 |---|---|---|---|---|---|---|
-| `code-smells-project` | 8 | 5 | 13 | 6 | 32 | 28 (4 pendentes) |
-| `ecommerce-api-legacy` | 5 | 6 | 11 | 7 | 29 | 25 (4 pendentes) |
-| `task-manager-api` | 4 | 5 | 10 | 7 | 26 | 22 (4 pendentes) |
+| `code-smells-project` | 8 | 6 | 12 | 8 | 34 | 32 (2 pendentes, LOW) |
+| `ecommerce-api-legacy` | 5 | 5 | 12 | 7 | 29 | 27 (2 pendentes, MEDIUM e LOW) |
+| `task-manager-api` | 3 | 5 | 10 | 7 | 25 | 23 (2 pendentes, LOW) |
+
+Os pendentes dependem de algo fora do código: atualizar pacotes, que exige aprovação, ou mudar o schema e os dados existentes. Nenhum finding de autenticação ficou pendente.
 
 ### Projeto 1 — `code-smells-project`
 
@@ -237,39 +245,42 @@ A skill foi desenvolvida rodando no projeto 1: cada execução revelou um compor
 |---|---|---|---|
 | 1ª | 33 | Protegeu `GET /pedidos` e `GET /relatorios/vendas` como rotas administrativas, criou uma máquina de estados para o status do pedido e tirou do `/health` dados que não eram sensíveis. O relatório se contradizia sobre o schema. | Definição objetiva de rota administrativa e de dado sensível, regra contra regras de negócio novas e regra de coerência no relatório (`4374646`). |
 | 2ª | 35 | Respeitou o contrato, mas ficou conservadora: manteve o faturamento com pedidos cancelados, o e-mail duplicado e a quantidade zero como pendências. | A regra passou a aceitar como evidência o que o próprio código expressa e o que corrompe dados (`4b16fc2`). |
-| 3ª | 32 | Corrigiu os três casos sem inventar regras. | Versão final. |
+| 3ª | 32 | Corrigiu os três casos sem inventar regras. | Versão da primeira entrega. |
+| 4ª | 34 | Depois da revisão, a regra passou a exigir o dono da conta nas rotas de identidade, mas as escritas no catálogo e as listagens gerais continuariam públicas, com um HIGH pendente. A execução parou antes da Fase 3. | Níveis de acesso para todas as rotas na regra 3 e no PB06 (`52ab064`). |
+| 5ª | 33 | Protegeu cada rota pelo seu nível e resolveu 31 findings, sem HIGH pendente. | Versão aplicada aos projetos 2 e 3. |
+| 6ª | 34 | Refeita depois dos dois ajustes que o projeto 3 revelou. Resolveu 32 findings. | Versão final (`76f24a0`). |
 
 #### Relatório de auditoria
 
-O relatório final está em [`reports/audit-project-1.md`](reports/audit-project-1.md): 32 findings, sem APIs deprecated no código. A tabela compara os problemas da seção A com os findings da skill e o estado de cada um após a Fase 3.
+O relatório final está em [`reports/audit-project-1.md`](reports/audit-project-1.md): 34 findings, sem APIs deprecated no código. A tabela compara os problemas da seção A com os findings da skill e o estado de cada um após a Fase 3.
 
 | Seção A | Finding | Após a Fase 3 |
 |---|---|---|
-| P1-01 SQL Injection | F01 | Resolvido |
-| P1-02 Execução de SQL por HTTP | F02 | Resolvido: exige token e fica desligado por padrão |
+| P1-01 SQL Injection | F02 | Resolvido |
+| P1-02 Execução de SQL por HTTP | F01 | Resolvido: exige administrador e fica desligado por padrão |
 | P1-03 Reset do banco sem autenticação | F03 | Resolvido |
-| P1-04 Segredos hardcoded | F07, F06 | Parcial: `SECRET_KEY` vem do ambiente e saiu do `/health`; as senhas de exemplo do seed continuam no código |
-| P1-05 Senhas em texto plano | F05 | Resolvido |
+| P1-04 Segredos hardcoded | F07, F06 | Resolvido: `SECRET_KEY` vem do ambiente e saiu do `/health`; a senha do admin do seed vem de `SEED_ADMIN_PASSWORD` |
+| P1-05 Senhas em texto plano | F04 | Resolvido |
 | P1-06 God module | F08 | Resolvido |
-| P1-07 Conexão global | F10 | Resolvido |
-| P1-08 Regras espalhadas | F11 | Resolvido |
-| P1-09 Sem autenticação | F13 | Pendente: mudaria o contrato das rotas comuns |
-| P1-10 Debug com servidor exposto | F09 | Resolvido |
-| P1-11 Queries N+1 | F21 | Resolvido |
-| P1-12 Duplicação | F22 | Resolvido |
-| P1-13 Quantidade negativa ou zero | F14 | Resolvido |
-| P1-14 Schema sem restrições | F17 | Parcial: e-mail duplicado bloqueado no service; constraints exigem migração |
-| P1-15 `get_db()` com schema e seed | F23 | Resolvido |
-| P1-16 Faturamento com cancelados | F16 | Resolvido |
+| P1-07 Conexão global | F13 | Resolvido |
+| P1-08 Regras espalhadas | F12 | Resolvido |
+| P1-09 Sem autenticação | F09, F10 | Resolvido: o login emite token, e cada rota exige o seu nível de acesso |
+| P1-10 Debug com servidor exposto | F11 | Resolvido |
+| P1-11 Queries N+1 | F20 | Resolvido |
+| P1-12 Duplicação | F21 | Resolvido |
+| P1-13 Quantidade negativa ou zero | F18 | Resolvido |
+| P1-14 Schema sem restrições | F16 | Parcial: bancos novos ganham `NOT NULL`, chaves estrangeiras e e-mail único, e os services conferem as mesmas regras nos bancos antigos; excluir produto com pedidos continua permitido |
+| P1-15 `get_db()` com schema e seed | F22 | Resolvido |
+| P1-16 Faturamento com cancelados | F15 | Resolvido |
 | P1-17 Sem paginação | F26 | Resolvido |
 | P1-18 Formato de resposta | F24 | Resolvido |
 | P1-19 CORS aberto | F25 | Resolvido |
-| P1-20 Valores mágicos | F27 | Resolvido |
+| P1-20 Valores mágicos | F28 | Resolvido |
 | P1-21 Configuração fixa | F31 | Resolvido |
 | P1-22 Imports não usados | F30 | Resolvido |
-| P1-23 Dependências vulneráveis | — | Não reportado: sem `pip-audit`, ficou como recomendação |
+| P1-23 Dependências vulneráveis | F34 | Não confirmado: sem `pip-audit`, a skill registrou a falta de auditoria, mas não as falhas |
 
-Além da seção A, a skill encontrou, entre outros, a senha devolvida por `GET /usuarios` (F04), o cancelamento que não devolve estoque (F15), a atualização de status de pedido inexistente respondendo 200 (F18) e erros do cliente convertidos em 500 (F20). Valores monetários em `REAL` e status sem `CHECK` (F32) ficaram como recomendação, porque exigem migração.
+Além da seção A, a skill encontrou, entre outros, a senha devolvida por `GET /usuarios` (F05), o cancelamento que não devolvia o estoque (F15), o pedido gravado sem transação (F17) e mensagens internas devolvidas ao cliente com `str(e)` (F19). Status sem `CHECK`, a coluna `ativo` sem uso e valores em `REAL` (F33) ficaram pendentes, porque exigem migração.
 
 #### Estrutura antes e depois
 
@@ -294,14 +305,16 @@ code-smells-project/
 └── src/
     ├── app.py
     ├── config/        settings.py
-    ├── database/      __init__.py · schema.py · seed.py
-    ├── models/        produto · usuario · pedido · admin
-    ├── services/      produto · usuario · pedido · relatorio · admin · health · notificacao
-    ├── controllers/   produto · usuario · pedido · relatorio · admin · sistema
-    ├── routes/        produto · usuario · pedido · relatorio · admin · sistema
-    ├── middlewares/   auth.py · error_handler.py
-    └── utils/         errors.py · validators.py · logger.py
+    ├── database/      connection.py · schema.py · seed.py
+    ├── models/        base · produto · usuario · pedido · sistema · admin
+    ├── services/      produto · usuario · pedido · relatorio · notificacao · sistema · admin
+    ├── controllers/   produto · usuario · pedido · relatorio · sistema · admin
+    ├── routes/        produto · usuario · pedido · relatorio · sistema · admin
+    ├── middlewares/   auth.py · error_handler.py · headers.py
+    └── utils/         errors.py · validators.py · senhas.py · logger.py
 ```
+
+O `middlewares/auth.py` concentra os níveis de acesso. A composition root injeta nele a função do service de usuários que recarrega a conta do token a cada requisição.
 
 #### Checklist de validação
 
@@ -315,13 +328,13 @@ code-smells-project/
 - [x] Relatório segue o template definido nos arquivos de referência
 - [x] Cada finding tem arquivo e linhas exatos
 - [x] Findings ordenados por severidade (CRITICAL → LOW)
-- [x] Mínimo de 5 findings identificados (32)
+- [x] Mínimo de 5 findings identificados (34)
 - [x] Detecção de APIs deprecated incluída (nenhuma no código)
 - [x] Skill pausa e pede confirmação antes da Fase 3
 
 **Fase 3 — Refatoração**
 - [x] Estrutura de diretórios segue padrão MVC
-- [x] Configuração extraída para módulo de config, exceto as senhas de exemplo do seed (pendência de F07)
+- [x] Configuração extraída para módulo de config
 - [x] Models criados para abstrair dados
 - [x] Views/Routes separadas para roteamento
 - [x] Controllers concentram o fluxo da aplicação
@@ -332,33 +345,35 @@ code-smells-project/
 
 #### Aplicação rodando após a refatoração
 
-Inicialização com `python -W default app.py` e `ADMIN_TOKEN` definido:
+Inicialização com `python -W default app.py`, com `ADMIN_TOKEN`, `SECRET_KEY` e `SEED_ADMIN_PASSWORD` definidos:
 
 ```text
-WARNING src.app: SECRET_KEY não definida: usando chave aleatória temporária.
-WARNING src.database.seed: Seed: admin@loja.com criado com a senha de exemplo; defina SEED_ADMIN_PASSWORD ou SEED_ON_START=false fora do desenvolvimento.
-INFO src.database.seed: Banco populado com dados de exemplo.
+INFO src.database.seed: Banco populado com os dados de exemplo.
 INFO __main__: Servidor iniciado em http://127.0.0.1:5000
  * Serving Flask app 'src.app'
  * Debug mode: off
  * Running on http://127.0.0.1:5000
 ```
 
-Requisições feitas com `curl` contra a versão original e a refatorada:
+Requisições feitas com `curl` contra a versão original e a refatorada. As contas são as do seed: João e Maria são clientes, e `admin@loja.com` é a conta administrativa.
 
 | Requisição | Original | Refatorado |
 |---|---|---|
-| `GET /produtos`, `GET /pedidos`, `GET /relatorios/vendas` | 200 | 200 |
-| `GET /usuarios` | 200, com `senha` | 200, sem `senha` |
+| `GET /produtos` sem credencial | 200 | 200 |
+| `POST /produtos` sem credencial | 201 | 401 |
+| `GET /usuarios` com o token de um cliente | 200, com `senha` | 403 |
+| `GET /usuarios` com o token da conta admin | 200, com `senha` | 200, sem `senha` |
+| `POST /pedidos` para o João, com o token da Maria | 201 | 403 |
+| `POST /pedidos` para o João, com o token do João | 201 | 201 |
 | `GET /health` | 200, com `secret_key` | 200, sem `secret_key`, `db_path`, `debug` e `ambiente` |
 | `POST /login` com `admin@loja.com' --` | 200 | 401 |
 | `POST /usuarios` com e-mail já cadastrado | 201 | 409 |
 | `POST /pedidos` com quantidade −5 | 201 | 400 |
-| `POST /pedidos` para o usuário 999 | 201 | 400 |
 | `PUT /pedidos/999/status` | 200 | 404 |
 | `GET /relatorios/vendas` após cancelar um pedido | soma o cancelado | exclui o cancelado |
-| `POST /admin/reset-db` sem token | 200 | 401 |
-| `POST /admin/query` com token | 200 | 403, desligado por padrão |
+| `POST /admin/reset-db` sem credencial | 200 | 401 |
+| `POST /admin/query` com `X-Admin-Token` | 200 | 403, desligado por padrão |
+| Token de uma conta apagada pelo reset | — | 401 |
 
 O log não registrou nenhum traceback nem aviso de deprecação.
 
@@ -366,36 +381,36 @@ O log não registrou nenhum traceback nem aviso de deprecação.
 
 #### Execução
 
-A versão final da skill funcionou no projeto 2 na primeira execução, sem ajuste nas regras. A única correção depois dela foi no procedimento de liberar a porta, descrita em "Desafios encontrados".
+A versão com níveis de acesso funcionou no projeto 2 na primeira execução, sem ajuste nas regras. Os dois ajustes que o projeto 3 revelou depois não se aplicam aqui, porque o projeto não tem login nem papel de administrador; por isso ele não foi refeito.
 
-O projeto tem só três rotas, e a definição de rota administrativa fez diferença: `GET /api/admin/financial-report` passou a exigir token, enquanto `DELETE /api/users/:id`, que é exclusão de um recurso individual, continuou pública e ficou registrada como pendência. Pela regra de negócio, a matrícula repetida passou a ser recusada, porque gera cobrança em dobro. Já a senha ignorada quando o e-mail já existe ficou como recomendação, porque o código não declara essa verificação.
+O projeto não tem login, e a skill não criou um. As provas passaram a ser as que já existiam ou vêm da configuração. O checkout de um e-mail já cadastrado age em nome daquela conta, então passou a exigir a senha que a rota já recebia, ou o token administrativo. Um e-mail novo continua sendo cadastro. O relatório financeiro e a exclusão de usuário exigem o token administrativo. Pela regra de negócio, a matrícula repetida passou a ser recusada, porque gera cobrança em dobro.
 
 #### Relatório de auditoria
 
-O relatório está em [`reports/audit-project-2.md`](reports/audit-project-2.md): 29 findings, sem APIs deprecated no código. Os pacotes deprecated da árvore de dependências estão no F16.
+O relatório está em [`reports/audit-project-2.md`](reports/audit-project-2.md): 29 findings, sem APIs deprecated no código. Os pacotes deprecated da árvore de dependências estão no F22.
 
 | Seção A | Finding | Após a Fase 3 |
 |---|---|---|
-| P2-01 Segredos hardcoded | F03 | Resolvido: credenciais removidas do código; a rotação das que estão no histórico do git fica como recomendação |
+| P2-01 Segredos hardcoded | F01 | Resolvido: credenciais removidas do código; a rotação das que estão no histórico do git fica como recomendação |
 | P2-02 Cartão e chave no log | F02 | Resolvido: o log mostra só `**** 4444` |
 | P2-03 God Class | F05 | Resolvido |
-| P2-04 Rotas administrativas e destrutivas sem autenticação | F01, F07 | Parcial: o relatório exige token; `DELETE /api/users/:id` continua público |
-| P2-05 Um request derruba o servidor | F06 | Resolvido |
-| P2-06 Sem injeção de dependência | F10 | Resolvido |
-| P2-07 N+1 no relatório | F18 | Resolvido |
-| P2-08 Callbacks aninhados | F19 | Resolvido |
-| P2-09 Erros ignorados | F15, F13 | Resolvido |
-| P2-10 Validação do checkout | F17 | Parcial: tipos validados com 400; formato de e-mail e de cartão fica como recomendação |
-| P2-11 Matrícula duplicada e senha ignorada | F12, F08 | Parcial: matrícula repetida recusada com 409; a senha da conta existente continua sem verificação |
-| P2-12 Exclusão deixa órfãos | F13 | Resolvido |
-| P2-13 Dependências vulneráveis | F16 | Pendente: atualizar pacotes exige aprovação |
+| P2-04 Rotas administrativas e destrutivas sem autenticação | F04, F06 | Resolvido: o relatório e a exclusão de usuário exigem o token administrativo |
+| P2-05 Um request derruba o servidor | F07 | Resolvido |
+| P2-06 Sem injeção de dependência | F09 | Resolvido |
+| P2-07 N+1 no relatório | F15 | Resolvido |
+| P2-08 Callbacks aninhados | F16 | Resolvido |
+| P2-09 Erros ignorados | F17, F11 | Resolvido |
+| P2-10 Validação do checkout | F18 | Parcial: tipos validados com 400; formato de e-mail e de cartão fica como recomendação |
+| P2-11 Matrícula duplicada e senha ignorada | F12, F06 | Resolvido: matrícula repetida recusada com 409; conta existente exige a senha ou o token administrativo |
+| P2-12 Exclusão deixa órfãos | F11, F14 | Resolvido |
+| P2-13 Dependências vulneráveis | F22 | Pendente: atualizar pacotes exige aprovação |
 | P2-14 Valores mágicos | F23 | Resolvido |
-| P2-15 Código morto | F24 | Resolvido |
-| P2-16 `self = this` com arrow functions | F19, F28 | Resolvido |
-| P2-17 Configuração fixa | F26 | Resolvido |
-| P2-18 `X-Powered-By` | F25 | Resolvido |
+| P2-15 Código morto | F26 | Resolvido |
+| P2-16 `self = this` com arrow functions | F16, F25 | Resolvido |
+| P2-17 Configuração fixa | F27 | Resolvido |
+| P2-18 `X-Powered-By` | F28 | Resolvido |
 
-Além da seção A, a skill encontrou o hash de senha caseiro que gera o mesmo valor para `"123"` e `"123456"` (F04), o cache global que cresce e nunca é lido (F11), o checkout gravado sem transação (F14) e o campo `paid` do relatório ignorando o status do pagamento (F22). Valores monetários em `REAL` (F29) ficaram como recomendação.
+Além da seção A, a skill encontrou o hash de senha caseiro que depende só do início da senha e a senha padrão `123456` (F03), o cache global que cresce e nunca é lido (F10) e o checkout gravado sem transação (F13). Valores monetários em `REAL` (F29) ficaram pendentes, e a conta criada num checkout recusado, como recomendação.
 
 #### Estrutura antes e depois
 
@@ -421,16 +436,16 @@ ecommerce-api-legacy/
 └── src/
     ├── app.js
     ├── config/        index.js
-    ├── database/      connection.js · schema.js
+    ├── database/      connection.js · schema.js · seed.js
     ├── models/        user · course · enrollment · payment · auditLog · report
-    ├── services/      checkout · report · user
+    ├── services/      checkout · payment · report · user
     ├── controllers/   checkout · report · user
     ├── routes/        checkout · report · user
-    ├── middlewares/   adminAuth · asyncHandler · errorHandler
+    ├── middlewares/   auth · asyncHandler · errorHandler
     └── utils/         errors · logger · password · validators
 ```
 
-A skill também atualizou o `README.md` e o `api.http` do projeto para mostrar o header `X-Admin-Token`, já que o exemplo do relatório deixaria de funcionar sem ele.
+A skill também atualizou o `README.md` e o `api.http` do projeto para mostrar o header `X-Admin-Token` e a senha no checkout de uma conta existente, já que os exemplos deixariam de funcionar sem eles.
 
 #### Checklist de validação
 
@@ -445,7 +460,7 @@ A skill também atualizou o `README.md` e o `api.http` do projeto para mostrar o
 - [x] Cada finding tem arquivo e linhas exatos
 - [x] Findings ordenados por severidade (CRITICAL → LOW)
 - [x] Mínimo de 5 findings identificados (29)
-- [x] Detecção de APIs deprecated incluída (nenhuma no código; pacotes deprecated apontados no F16)
+- [x] Detecção de APIs deprecated incluída (nenhuma no código; pacotes deprecated apontados no F22)
 - [x] Skill pausa e pede confirmação antes da Fase 3
 
 **Fase 3 — Refatoração**
@@ -467,65 +482,72 @@ Inicialização com `npm start` e `ADMIN_TOKEN` definido:
 > desafio-arquitetura-ia-boilerplate@1.0.0 start
 > node src/app.js
 
-{"level":"info","msg":"Banco populado com os dados de exemplo"}
-{"level":"info","msg":"LMS API rodando em http://127.0.0.1:3000"}
-{"level":"info","msg":"Processando pagamento","card":"**** 4444","courseId":2,"userId":2}
+{"level":"warn","msg":"PAYMENT_GATEWAY_KEY não definida: integração com o gateway desabilitada; a aprovação segue a regra simulada."}
+{"level":"info","msg":"Dados de exemplo carregados"}
+{"level":"info","msg":"Frankenstein LMS rodando em http://127.0.0.1:3000"}
+{"level":"info","msg":"Processando pagamento","card":"**** 4444","amount":497,"gatewayKeyConfigured":false}
 ```
 
 Requisições feitas com `curl` contra a versão original e a refatorada:
 
 | Requisição | Original | Refatorado |
 |---|---|---|
-| `POST /api/checkout` com o exemplo de sucesso do `api.http` | 200 | 200 |
-| `POST /api/checkout` com pagamento recusado | 400, texto | 400, `{"error"}` |
+| `POST /api/checkout` com e-mail novo (exemplo do `api.http`) | 200 | 200 |
+| `POST /api/checkout` de conta existente, com a senha certa | 200 | 200 |
+| `POST /api/checkout` de conta existente, com senha errada ou sem senha | 200 | 401 |
+| `POST /api/checkout` com senha errada e `X-Admin-Token` | 200 | 200 |
 | `POST /api/checkout` repetindo a mesma compra | 200, nova cobrança | 409 |
+| `POST /api/checkout` com pagamento recusado | 400, texto | 400, `{"error"}` |
 | `POST /api/checkout` com `card` numérico | processo encerrado | 400, servidor continua no ar |
-| `GET /api/admin/financial-report` sem token | 200 | 401 |
+| `GET /api/admin/financial-report` sem token ou com token errado | 200 | 401 |
 | `GET /api/admin/financial-report` com token | 200 | 200 |
-| `DELETE /api/users/9999` | 200, "Usuário deletado" | 404 |
+| `DELETE /api/users/1` sem token | 200 | 401 |
+| `DELETE /api/users/9999` com token | 200, "Usuário deletado" | 404 |
 | Relatório depois de excluir um usuário | aluno `Unknown` | sem registros órfãos |
 | Header `X-Powered-By` | `Express` | ausente |
+
+Com a senha errada, a resposta é 401 mesmo quando a pessoa já está matriculada no curso: a credencial é conferida antes da matrícula, para não revelar quem está matriculado.
 
 ### Projeto 3 — `task-manager-api`
 
 #### Execução
 
-A skill funcionou no projeto 3 na primeira execução, sem ajuste nas regras. Antes dela, o procedimento de liberar a porta recebeu mais uma correção, descrita em "Desafios encontrados".
+O projeto 3 foi o que mais exigiu da regra de níveis de acesso: já tinha login, com um token de fachada, e o seed define três papéis (`admin`, `user` e `manager`). A primeira execução com a regra nova revelou duas lacunas, descritas em "Desafios encontrados". A senha da conta `admin` ficou fixa no seed. E uma conta rebaixada ou desativada continuava com o acesso do token até ele expirar. Com a skill ajustada, o projeto foi refeito do zero.
 
-O projeto já tinha pastas de camadas (tipo B). Por isso, a skill manteve a estrutura na raiz e completou o que faltava: configuração, controllers, services com as regras, middlewares e um módulo próprio para as rotas de categorias. Nenhuma rota é administrativa pela regra 3, então a autenticação ficou como pendência. A exceção foi o papel do usuário: qualquer cliente podia se cadastrar como `admin`, e a skill tratou isso como dado de identidade corrompido. O campo `role` continua aceito, mas um papel diferente de `user` passou a exigir o token administrativo.
+O projeto já tinha pastas de camadas (tipo B). Por isso, a skill manteve a estrutura na raiz e completou o que faltava: configuração, controllers, services com as regras, middlewares, um módulo próprio para as rotas de categorias e a composition root em `app_factory.py`. O login passou a emitir um token assinado no mesmo campo `token`. Os dados de uma conta passaram a exigir o dono ou um administrador, e só um administrador define ou muda o `role`. Leituras de tasks que trazem só ids continuaram públicas. `GET /tasks`, que traz o nome do responsável, passou a exigir conta.
 
 Foi também o primeiro projeto com APIs deprecated no próprio código. A skill confirmou o `Query.get()` no fonte do SQLAlchemy instalado e trocou as duas APIs sem mudar o formato das datas nas respostas.
 
 #### Relatório de auditoria
 
-O relatório está em [`reports/audit-project-3.md`](reports/audit-project-3.md): 26 findings, com duas APIs deprecated no código (F18 e F19).
+O relatório está em [`reports/audit-project-3.md`](reports/audit-project-3.md): 25 findings, com duas APIs deprecated no código (F17).
 
 | Seção A | Finding | Após a Fase 3 |
 |---|---|---|
-| P3-01 Segredos hardcoded | F03 | Parcial: `SECRET_KEY` vem do ambiente e as credenciais SMTP saíram junto com o serviço sem uso; as senhas de demonstração do seed continuam |
-| P3-02 Hash da senha exposto | F01, F02 | Resolvido: `password` saiu das respostas, e as senhas novas usam scrypt |
-| P3-03 Autenticação de fachada e escalada de privilégio | F05, F07 | Parcial: papel diferente de `user` exige token; o token do login continua sem verificação |
-| P3-04 Rotas concentram a lógica | F04, F08 | Resolvido |
+| P3-01 Segredos hardcoded | F03 | Resolvido: `SECRET_KEY` vem do ambiente, as credenciais SMTP saíram junto com o serviço sem uso e a senha da conta `admin` do seed vem de `SEED_ADMIN_PASSWORD` |
+| P3-02 Hash da senha exposto | F01, F02 | Resolvido: `password` saiu das respostas, e as senhas usam scrypt |
+| P3-03 Autenticação de fachada e escalada de privilégio | F04, F05 | Resolvido: token assinado, nível de acesso em cada rota, `role` definido só por administrador e conta recarregada a cada requisição |
+| P3-04 Rotas concentram a lógica | F07, F08 | Resolvido |
 | P3-05 Debug com servidor exposto | F06 | Resolvido |
-| P3-06 Queries N+1 | F13 | Resolvido |
-| P3-07 Agregações ineficientes | F13 | Resolvido |
-| P3-08 Lógica do model reescrita nas rotas | F14 | Resolvido |
-| P3-09 `except:` genérico | F11 | Resolvido |
-| P3-10 Validações ausentes resultam em 500 | F10 | Resolvido |
-| P3-11 APIs deprecated | F18, F19 | Resolvido |
-| P3-12 Sem paginação | F17 | Resolvido: `limit` e `offset` opcionais, mantendo o array |
-| P3-13 Categorias no blueprint de relatórios | F16 | Resolvido |
+| P3-06 Queries N+1 | F12 | Resolvido |
+| P3-07 Agregações ineficientes | F12 | Resolvido |
+| P3-08 Lógica do model reescrita nas rotas | F13 | Resolvido |
+| P3-09 `except:` genérico | F10 | Resolvido |
+| P3-10 Validações ausentes resultam em 500 | F09 | Resolvido |
+| P3-11 APIs deprecated | F17 | Resolvido |
+| P3-12 Sem paginação | F16 | Resolvido: `limit` e `offset` opcionais, mantendo o array |
+| P3-13 Categorias no blueprint de relatórios | F18 | Resolvido |
 | P3-14 Tabelas criadas no import | F15 | Parcial: o `create_all` foi para a app factory, mas o `app.py` ainda cria a aplicação no import para manter o `from app import app, db` do seed; migrações ficam como recomendação |
-| P3-15 Dependências vulneráveis | F20 | Pendente: atualizar pacotes exige aprovação; sem `pip-audit`, as falhas não foram confirmadas |
-| P3-16 CORS aberto | F12 | Resolvido |
-| P3-17 `print()` no lugar de logging | F23 | Resolvido |
-| P3-18 Imports não usados | F21 | Resolvido |
-| P3-19 Código morto | F21 | Resolvido |
-| P3-20 Valores mágicos | F22 | Resolvido |
-| P3-21 Configuração fixa | F24 | Resolvido |
+| P3-15 Dependências vulneráveis | F19 | Pendente: atualizar pacotes exige aprovação; sem `pip-audit`, as falhas não foram confirmadas |
+| P3-16 CORS aberto | F14 | Resolvido |
+| P3-17 `print()` no lugar de logging | F22 | Resolvido |
+| P3-18 Imports não usados | F20 | Resolvido |
+| P3-19 Código morto | F20 | Resolvido |
+| P3-20 Valores mágicos | F21 | Resolvido |
+| P3-21 Configuração fixa | F23 | Resolvido |
 | P3-22 Tags em texto separado por vírgula | F25 | Pendente: exige mudar o schema e os dados existentes |
 
-Além da seção A, a skill encontrou a task gravada com `user_id: 0`, uma referência a usuário inexistente (F10), os erros do framework (404, 405 e 415) saindo em HTML (F11), o seed que apaga todos os dados sem checar o ambiente (F15) e o `print` que registra dados pessoais (F23). O status sem `CHECK` no schema (F25) ficou como recomendação, junto com as tags.
+Além da seção A, a skill encontrou referências gravadas com `user_id: 0`, sem apontar para nenhum usuário, e as chaves estrangeiras que o SQLite não aplicava (F11), os erros do framework saindo em HTML (F10) e validações que só existiam na criação (F09). O status sem enumeração no schema (F25) ficou pendente junto com as tags, e o que o papel `manager` pode fazer ficou como recomendação, porque o código não define.
 
 #### Estrutura antes e depois
 
@@ -543,22 +565,23 @@ task-manager-api/
 └── utils/       helpers
 ```
 
-Depois, `python seed.py` e `python app.py` continuam iguais. O `app.py` virou a composition root: `create_app(settings)` configura o Flask, o banco, o CORS e o tratamento de erros e registra um blueprint por domínio:
+Depois, `python seed.py` e `python app.py` continuam iguais. O `app.py` só lê a configuração e chama `create_app(settings)` em `app_factory.py`, a composition root, que configura o Flask, o banco, o CORS, a autenticação e o tratamento de erros e registra um blueprint por domínio:
 
 ```text
 task-manager-api/
 ├── app.py
+├── app_factory.py
 ├── database.py
 ├── seed.py
 ├── requirements.txt
 ├── .env.example
 ├── config/        settings.py
 ├── models/        task · user · category
-├── services/      task · user · category · report
-├── controllers/   health · task · user · category · report
-├── routes/        health · task · user · category · report
+├── services/      auth · task · user · category · report
+├── controllers/   auth · task · user · category · report · system
+├── routes/        auth · task · user · category · report · system
 ├── middlewares/   auth.py · error_handler.py
-└── utils/         errors · validators · helpers · logger
+└── utils/         errors · validators · helpers · logger · time
 ```
 
 #### Checklist de validação
@@ -573,13 +596,13 @@ task-manager-api/
 - [x] Relatório segue o template definido nos arquivos de referência
 - [x] Cada finding tem arquivo e linhas exatos
 - [x] Findings ordenados por severidade (CRITICAL → LOW)
-- [x] Mínimo de 5 findings identificados (26)
+- [x] Mínimo de 5 findings identificados (25)
 - [x] Detecção de APIs deprecated incluída (`Query.get()` e `datetime.utcnow()`)
 - [x] Skill pausa e pede confirmação antes da Fase 3
 
 **Fase 3 — Refatoração**
 - [x] Estrutura de diretórios segue padrão MVC
-- [x] Configuração extraída para módulo de config, exceto as senhas de demonstração do seed (pendência de F03)
+- [x] Configuração extraída para módulo de config
 - [x] Models criados para abstrair dados
 - [x] Views/Routes separadas para roteamento
 - [x] Controllers concentram o fluxo da aplicação
@@ -590,35 +613,39 @@ task-manager-api/
 
 #### Aplicação rodando após a refatoração
 
-Inicialização com `python -W default app.py` e `ADMIN_TOKEN` definido, depois do `python seed.py`:
+Inicialização com `python -W default app.py`, depois do `python seed.py`, com `ADMIN_TOKEN`, `SECRET_KEY` e `SEED_ADMIN_PASSWORD` definidos:
 
 ```text
-SECRET_KEY não definida: usando chave aleatória temporária.
- * Serving Flask app 'app'
+ * Serving Flask app 'app_factory'
  * Debug mode: off
-2026-11-11 09:47:38,810 INFO werkzeug: WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+INFO werkzeug: WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
  * Running on http://127.0.0.1:5000
-2026-11-11 09:47:38,810 INFO werkzeug: Press CTRL+C to quit
+INFO werkzeug: Press CTRL+C to quit
 ```
 
-Requisições feitas com `curl` contra a versão original e a refatorada:
+Requisições feitas com `curl` contra a versão original e a refatorada. As contas são as do seed: João é `admin`, Maria é `user` e Pedro é `manager`.
 
 | Requisição | Original | Refatorado |
 |---|---|---|
-| Leituras de tasks, usuários, categorias e relatórios | 200 | 200, com os mesmos valores |
-| `GET /users/1`, `POST /users`, `PUT /users/:id` e `POST /login` | com `password` | sem `password` |
-| `POST /login` de usuário com hash MD5 | 200 | 200, hash regravado em scrypt |
-| `POST /users` com `role: admin`, sem token | 201 | 401 |
-| `POST /users` com `role: manager` e token | 201 | 201 |
-| `POST /tasks` com `user_id: 0` | 201, referência a usuário inexistente | 404 |
+| `PUT /users/2` trocando a senha da Maria, sem credencial | 200, senha trocada | 401 |
+| `PUT /users/2` trocando a senha da Maria, com o token do Pedro | 200, senha trocada | 403 |
+| `PUT /users/2` com o token da Maria | 200 | 200 |
+| `PUT /users/2` com o token da Maria, mudando o próprio `role` | 200 | 403 |
+| `POST /users` com `role: admin`, sem credencial | 201 | 401 |
+| `GET /users` com o token da Maria / do João | 200 / 200 | 403 / 200 |
+| Token de fachada `fake-jwt-token-2` | aceito, sem verificação | 401 |
+| `GET /tasks` sem credencial / com token | 200 / 200 | 401 / 200 |
+| `GET /tasks/1`, `/tasks/search` e `/categories` sem credencial | 200 | 200 |
+| `GET /users/1` e `POST /login` | com `password` | sem `password` |
 | `POST /tasks` com `priority: "alta"` | 500, página do debugger | 400, `{"error"}` |
 | `GET /tasks/search?priority=abc` | 500, página do debugger | 400, `{"error"}` |
 | `PUT /categories/1` com corpo `null` | 500, página do debugger | 400, `{"error"}` |
-| Rota inexistente | 404, HTML | 404, `{"error"}` |
 | CORS com origem desconhecida | origem aceita | sem `Access-Control-Allow-Origin` |
 | Endereço do servidor | `0.0.0.0:5000`, debug ligado | `127.0.0.1:5000`, debug desligado |
 
-As leituras foram comparadas campo a campo, ignorando datas e o `password`, e devolveram os mesmos valores nas duas versões. O banco criado pelo seed original também abriu na versão refatorada, com login funcionando. O log não registrou nenhum traceback nem aviso de deprecação; com o mesmo plano, o original gerou 14 `LegacyAPIWarning`.
+Os tokens emitidos antes de uma mudança na conta também foram testados. Com o token antigo, a conta desativada recebe 401, inclusive para trocar a própria senha. A conta rebaixada de `admin` recebe 403 ao listar ou excluir usuários, mas continua usando as rotas comuns. O token de uma conta excluída recebe 401.
+
+A skill comparou os valores de `/tasks/stats`, `/reports/summary`, `/reports/user/2`, `/users` e `/categories` com os da versão original, e eles foram iguais. O log não registrou nenhum traceback nem aviso de deprecação. Como as senhas passaram de MD5 para scrypt, um banco criado pela versão original precisa do `python seed.py` de novo.
 
 ### Comportamento em stacks diferentes
 
@@ -626,27 +653,35 @@ A tabela mede a skill contra os problemas da seção A. As colunas de resolvidos
 
 | Projeto | Stack | Tipo | Encontrados | Resolvidos | Parciais | Pendentes |
 |---|---|---|---|---|---|---|
-| `code-smells-project` | Flask + sqlite3 | A | 22 de 23 | 19 | 2 | 1 |
-| `ecommerce-api-legacy` | Express + sqlite3 | A | 18 de 18 | 14 | 3 | 1 |
-| `task-manager-api` | Flask + Flask-SQLAlchemy | B | 22 de 22 | 17 | 3 | 2 |
+| `code-smells-project` | Flask + sqlite3 | A | 22 de 23 | 21 | 1 | 0 |
+| `ecommerce-api-legacy` | Express + sqlite3 | A | 18 de 18 | 16 | 1 | 1 |
+| `task-manager-api` | Flask + Flask-SQLAlchemy | B | 22 de 22 | 19 | 1 | 2 |
 
 **Detecção.** A Fase 1 acertou linguagem, framework, versão e domínio nos três projetos. Nos projetos Python, as versões vieram do venv e dos pacotes instalados; no Node, do runtime e do lockfile. No projeto 3, a skill também registrou o SQLAlchemy 2.1.8, que o `requirements.txt` não fixa e que define quais APIs estão deprecated.
 
 **Estrutura por tipo.** Os projetos 1 e 2 eram monolitos (tipo A) e ganharam a estrutura do zero em `src/`, com o entry point original só chamando a composition root. O projeto 3 já tinha pastas de camadas (tipo B), e a skill as manteve na raiz, completando as que faltavam.
 
-**Idiomas de cada stack.** O MVC foi o mesmo, mas a implementação seguiu cada stack. No Flask com sqlite3, a conexão passou a ser aberta por requisição em `flask.g`. Com Flask-SQLAlchemy, as consultas foram para os models, com `GROUP BY` e carga em lote. No Node, o driver `sqlite3` só oferece callbacks, então a skill criou um wrapper em Promises, com fila de transações, para usar `async/await`. Para hash de senha, usou o que já estava instalado: `werkzeug.security` no Flask e `crypto.scrypt` no Node.
+**Idiomas de cada stack.** O MVC foi o mesmo, mas a implementação seguiu cada stack. No Flask com sqlite3, a conexão passou a ser aberta por requisição em `flask.g`. Com Flask-SQLAlchemy, as consultas foram para os models, com `GROUP BY` e carga em lote. No Node, o driver `sqlite3` só oferece callbacks, então a skill criou um wrapper em Promises, com fila de transações, para usar `async/await`. Para hash de senha e tokens, usou o que já estava instalado: `werkzeug.security` e `itsdangerous` no Flask, `crypto.scrypt` no Node.
 
 **Falhas diferentes, mesma solução.** No Node, uma exceção não tratada derrubava o processo inteiro. No Flask, o modo debug transformava qualquer erro numa página com código-fonte. Nos dois casos, a skill centralizou o tratamento de erros e passou a responder JSON, com 4xx para entrada inválida.
 
-**Banco existente.** O tipo de banco mudou o que dava para corrigir no schema. No projeto 2, o banco em memória é recriado a cada boot, então a skill adicionou `UNIQUE` e chaves estrangeiras. Nos projetos 1 e 3, o banco em arquivo pode já ter dados, e mudar o schema exigiria migração. Por isso, as restrições ficaram como recomendação, e a skill manteve a compatibilidade com os dados antigos: no projeto 3, hashes MD5 já gravados continuam autenticando e são regravados no login.
+**Banco existente.** O tipo de banco mudou o que dava para corrigir no schema. No projeto 2, o banco em memória é recriado a cada boot, então a skill adicionou `UNIQUE` e chaves estrangeiras sem migração. Nos projetos 1 e 3, o banco em arquivo pode já ter dados. No projeto 1, bancos novos ganham as restrições, os antigos mantêm o schema com as mesmas regras conferidas nos services, e senhas em texto puro são convertidas em hash no boot. No projeto 3, as chaves estrangeiras passaram a valer por `PRAGMA`, e um banco antigo, com senhas em MD5, precisa do seed de novo.
 
 **Dependências.** O `npm audit` já vem com o npm, e a skill confirmou 13 vulnerabilidades no projeto 2. Nos projetos Python, sem `pip-audit` instalado, ela não confirmou falhas e registrou a auditoria como recomendação. Nos três casos, atualizar pacotes ficou pendente, porque exige aprovação.
 
 **APIs deprecated.** Só o projeto 3 usava APIs deprecated no código, e a skill as confirmou na versão instalada. Nos projetos 1 e 2, o relatório informou que não havia nenhuma, em vez de inventar achados.
 
-**Mesmas regras, decisões coerentes.** As regras de contrato e de regra de negócio levaram a decisões parecidas nas três stacks. A autenticação geral ficou pendente em todos os projetos, e só ganharam token as rotas que o projeto já marcava como administrativas: `/admin/*` no projeto 1 e o relatório financeiro no projeto 2. As correções de dados vieram de evidências no código: pedidos cancelados somados ao faturamento, matrícula cobrada duas vezes, task apontando para usuário inexistente. A interpretação mais ampla foi a do papel `admin` no projeto 3, tratado como dado de identidade.
+**Mesmas regras, decisões coerentes.** A regra de níveis de acesso levou à mesma divisão nas três stacks:
+- **Público:** cadastro, login, health e leituras sem dados pessoais.
+- **Conta autenticada:** escritas em dados sem dono.
+- **Dono da conta ou administrador:** dados de uma conta.
+- **Administrador:** listagens e relatórios que reúnem todas as contas.
 
-**Ambiente, não stack.** Os dois ajustes feitos depois da versão final foram no procedimento de liberar a porta e dependiam do Windows, não da linguagem: um apareceu no projeto Node e o outro no Flask com debug.
+No projeto 2, sem login, a mesma regra virou senha conferida no checkout e token administrativo na exclusão, sem rotas novas. As correções de dados continuaram vindo de evidências no código: pedidos cancelados somados ao faturamento, matrícula cobrada duas vezes, task apontando para usuário inexistente.
+
+**Variação entre execuções.** A mesma regra admite leituras diferentes. No projeto 3, uma execução exigiu conta para ler uma task pelo id; a seguinte a deixou pública, porque a resposta traz só ids, sem nome nem e-mail. As duas cabem na regra, e o relatório justifica o nível de cada rota. A detecção também variou: o header `Server` do Werkzeug virou finding numa execução do projeto 3 e não na outra.
+
+**Ajustes depois da versão aplicada.** Dois foram no procedimento de liberar a porta e dependiam do Windows, não da linguagem: um apareceu no projeto Node e o outro no Flask com debug. Os outros dois vieram do domínio do projeto 3, o único com papéis e contas que podem ser desativadas: a senha fixa da conta `admin` no seed e o token que guardava o papel. Eles não dependiam da stack, então a skill foi ajustada e os projetos 1 e 3 foram refeitos.
 
 ---
 
@@ -729,15 +764,38 @@ O `MSYS_NO_PATHCONV=1` só é necessário no Git Bash, para que `/refactor-arch`
 |---|---|---|
 | `code-smells-project` | `python app.py` | `curl http://127.0.0.1:5000/produtos` |
 | `ecommerce-api-legacy` | `npm start` | requisições do `api.http` |
-| `task-manager-api` | `python seed.py` e `python app.py` | `curl http://127.0.0.1:5000/tasks` |
+| `task-manager-api` | `python seed.py` e `python app.py` | `curl http://127.0.0.1:5000/categories` |
 
-**Rotas administrativas.** Defina `ADMIN_TOKEN` no shell antes de subir e envie o mesmo valor no header `X-Admin-Token`. Sem o header, a resposta deve ser 401:
+**Credenciais.** As rotas que não são públicas exigem credencial: sem ela, a resposta é 401; com uma credencial insuficiente (outra conta, papel sem permissão), 403. Nenhum projeto carrega arquivo `.env`, então defina as variáveis no shell antes de subir:
+
+| Variável | Para que serve |
+|---|---|
+| `ADMIN_TOKEN` | Valor do header `X-Admin-Token`, aceito como administrador nos três projetos |
+| `SECRET_KEY` | Assina os tokens de login nos projetos 1 e 3; sem ela, os tokens deixam de valer a cada reinício |
+| `SEED_ADMIN_PASSWORD` | Senha da conta administrativa do seed nos projetos 1 e 3; sem ela, a senha é aleatória |
+
+No projeto 3, o login devolve o token no campo `token`, que vai no header `Authorization: Bearer`:
+
+```bash
+cd task-manager-api
+SEED_ADMIN_PASSWORD=1234 python seed.py
+ADMIN_TOKEN=meu-token SECRET_KEY=minha-chave python app.py
+
+curl -X POST http://127.0.0.1:5000/login -H "Content-Type: application/json" \
+  -d '{"email":"maria@email.com","password":"abcd"}'
+curl -H "Authorization: Bearer <token>" http://127.0.0.1:5000/tasks
+curl -H "X-Admin-Token: meu-token" http://127.0.0.1:5000/users
+```
+
+No projeto 1, o login usa os campos `email` e `senha` e devolve o token numa chave nova, `token`. O seed roda no boot, então o `SEED_ADMIN_PASSWORD` vai no mesmo comando do `python app.py`. O `/admin/query` fica desligado até `ALLOW_ADMIN_SQL=true`.
+
+No projeto 2, que não tem login, o checkout de um e-mail já cadastrado exige a senha da conta em `pwd`. O relatório financeiro e a exclusão de usuário exigem o `X-Admin-Token`:
 
 ```bash
 ADMIN_TOKEN=meu-token npm start
 curl -H "X-Admin-Token: meu-token" http://127.0.0.1:3000/api/admin/financial-report
 ```
 
-No projeto 1, o token vale para `/admin/*`; no projeto 3, para cadastrar ou alterar usuários com papel diferente de `user`. As demais variáveis estão no `.env.example` de cada projeto. Nenhum deles carrega arquivo `.env`, então defina as variáveis no shell.
+As demais variáveis estão no `.env.example` de cada projeto.
 
 **Comparação com o original.** `git diff 6d1ce62 -- <projeto>` mostra tudo o que a refatoração mudou, e o relatório em `reports/` explica cada mudança e o que ficou pendente.
