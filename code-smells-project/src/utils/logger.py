@@ -1,4 +1,4 @@
-"""Logging da aplicação, configurado uma vez na composition root."""
+"""Configuração de logging, feita uma vez na composition root."""
 import logging
 
 

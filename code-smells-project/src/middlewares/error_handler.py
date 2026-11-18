@@ -12,7 +12,7 @@ _MENSAGENS_HTTP = {
     400: "Requisição inválida",
     404: "Recurso não encontrado",
     405: "Método não permitido",
-    415: "Content-Type não suportado",
+    415: "Content-Type deve ser application/json",
 }
 
 
@@ -22,14 +22,14 @@ def _erro(mensagem, status):
 
 def register_error_handlers(app):
     @app.errorhandler(AppError)
-    def handle_app_error(err):
-        return _erro(err.message, err.status)
+    def handle_app_error(erro):
+        return _erro(erro.message, erro.status)
 
     @app.errorhandler(HTTPException)
-    def handle_http_error(err):
-        return _erro(_MENSAGENS_HTTP.get(err.code, err.name), err.code or 500)
+    def handle_http_error(erro):
+        return _erro(_MENSAGENS_HTTP.get(erro.code, erro.description), erro.code)
 
     @app.errorhandler(Exception)
-    def handle_unexpected(err):
+    def handle_unexpected(erro):
         logger.exception("Erro inesperado")
         return _erro("Erro interno do servidor", 500)

@@ -7,8 +7,8 @@ logger = logging.getLogger(__name__)
 
 CATEGORIAS_VALIDAS = ["informatica", "moveis", "vestuario", "geral", "eletronicos", "livros"]
 CATEGORIA_PADRAO = "geral"
-NOME_TAMANHO_MIN = 2
-NOME_TAMANHO_MAX = 200
+NOME_TAMANHO_MINIMO = 2
+NOME_TAMANHO_MAXIMO = 200
 
 
 class ProdutoService:
@@ -16,7 +16,9 @@ class ProdutoService:
         self.produtos = produtos
 
     def listar(self, limite, offset):
-        return self.produtos.listar(limite, offset)
+        produtos = self.produtos.listar(limite, offset)
+        logger.info("Listando %d produtos", len(produtos))
+        return produtos
 
     def obter(self, produto_id):
         produto = self.produtos.buscar_por_id(produto_id)
@@ -24,43 +26,43 @@ class ProdutoService:
             raise AppError("Produto não encontrado", status=404)
         return produto
 
-    def buscar(self, limite, offset, termo="", categoria=None, preco_min=None, preco_max=None):
-        # Como no comportamento original, preço 0 equivale a filtro não informado.
-        return self.produtos.buscar(
-            limite, offset, termo=termo, categoria=categoria,
-            preco_min=preco_min or None, preco_max=preco_max or None,
-        )
+    def buscar(self, termo, categoria, preco_min, preco_max, limite, offset):
+        return self.produtos.buscar(termo, categoria, preco_min, preco_max, limite, offset)
 
-    def criar(self, dados):
-        self._validar(dados)
-        produto_id = self.produtos.inserir(
-            dados["nome"], dados["descricao"], dados["preco"], dados["estoque"], dados["categoria"]
-        )
+    def criar(self, nome, descricao, preco, estoque, categoria=None):
+        categoria = self._validar(nome, preco, estoque, categoria)
+        with self.produtos.transacao():
+            produto_id = self.produtos.criar(nome, descricao, preco, estoque, categoria)
         logger.info("Produto criado com ID: %s", produto_id)
         return produto_id
 
-    def atualizar(self, produto_id, dados):
-        self.obter(produto_id)
-        self._validar(dados)
-        self.produtos.atualizar(
-            produto_id, dados["nome"], dados["descricao"], dados["preco"], dados["estoque"], dados["categoria"]
-        )
+    def atualizar(self, produto_id, nome, descricao, preco, estoque, categoria=None):
+        categoria = self._validar(nome, preco, estoque, categoria)
+        with self.produtos.transacao():
+            atualizado = self.produtos.atualizar(produto_id, nome, descricao, preco, estoque, categoria)
+        if not atualizado:
+            raise AppError("Produto não encontrado", status=404)
 
     def deletar(self, produto_id):
-        self.obter(produto_id)
-        self.produtos.deletar(produto_id)
+        with self.produtos.transacao():
+            deletado = self.produtos.deletar(produto_id)
+        if not deletado:
+            raise AppError("Produto não encontrado", status=404)
         logger.info("Produto %s deletado", produto_id)
 
     @staticmethod
-    def _validar(dados):
-        """Regras de domínio, as mesmas para criar e atualizar."""
-        if dados["preco"] < 0:
-            raise AppError("Preço não pode ser negativo")
-        if dados["estoque"] < 0:
-            raise AppError("Estoque não pode ser negativo")
-        if len(dados["nome"]) < NOME_TAMANHO_MIN:
-            raise AppError("Nome muito curto")
-        if len(dados["nome"]) > NOME_TAMANHO_MAX:
-            raise AppError("Nome muito longo")
-        if dados["categoria"] not in CATEGORIAS_VALIDAS:
-            raise AppError("Categoria inválida. Válidas: " + str(CATEGORIAS_VALIDAS))
+    def _validar(nome, preco, estoque, categoria):
+        """Regras do produto, as mesmas para criar e atualizar. Devolve a categoria efetiva."""
+        if categoria is None:
+            categoria = CATEGORIA_PADRAO
+        if preco < 0:
+            raise AppError("Preço não pode ser negativo", status=400)
+        if estoque < 0:
+            raise AppError("Estoque não pode ser negativo", status=400)
+        if len(nome) < NOME_TAMANHO_MINIMO:
+            raise AppError("Nome muito curto", status=400)
+        if len(nome) > NOME_TAMANHO_MAXIMO:
+            raise AppError("Nome muito longo", status=400)
+        if categoria not in CATEGORIAS_VALIDAS:
+            raise AppError("Categoria inválida. Válidas: " + str(CATEGORIAS_VALIDAS), status=400)
+        return categoria

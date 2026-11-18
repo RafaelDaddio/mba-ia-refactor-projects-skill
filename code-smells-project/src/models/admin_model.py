@@ -1,35 +1,31 @@
 """Operações administrativas sobre o banco inteiro."""
 import sqlite3
 
-# Ordem que respeita as chaves estrangeiras: filhos antes dos pais.
-_TABELAS_RESET = ("itens_pedido", "pedidos", "produtos", "usuarios")
+from src.models.base_model import BaseModel
+
+# Ordem de exclusão: primeiro as tabelas que referenciam as outras.
+_TABELAS = ("itens_pedido", "pedidos", "produtos", "usuarios")
 
 
-class ErroSql(Exception):
-    """O SQL informado pelo administrador foi recusado pelo banco."""
+class ConsultaInvalida(Exception):
+    """O SQL recebido não pôde ser executado."""
 
 
-class AdminModel:
-    def __init__(self, db):
-        self.db = db
-
-    def apagar_tudo(self):
-        with self.db.transaction() as conn:
-            for tabela in _TABELAS_RESET:
-                conn.execute(f"DELETE FROM {tabela}")
+class AdminModel(BaseModel):
+    def limpar_dados(self):
+        for tabela in _TABELAS:  # nomes fixos, definidos acima
+            self._conn.execute(f"DELETE FROM {tabela}")
 
     def consultar(self, sql):
-        try:
-            rows = self.db.conn.execute(sql).fetchall()
-        except (sqlite3.Error, sqlite3.Warning) as erro:
-            raise ErroSql(str(erro)) from erro
-        return [dict(row) for row in rows]
+        """Executa um SELECT recebido do administrador e devolve as linhas."""
+        return [dict(linha) for linha in self._executar(sql).fetchall()]
 
     def executar(self, sql):
-        conn = self.db.conn
+        """Executa um comando SQL recebido do administrador."""
+        self._executar(sql)
+
+    def _executar(self, sql):
         try:
-            conn.execute(sql)
-            conn.commit()
+            return self._conn.execute(sql)
         except (sqlite3.Error, sqlite3.Warning) as erro:
-            conn.rollback()
-            raise ErroSql(str(erro)) from erro
+            raise ConsultaInvalida(str(erro)) from erro

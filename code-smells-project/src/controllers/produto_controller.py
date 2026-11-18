@@ -1,61 +1,71 @@
-"""Fluxo das requisições de produtos: lê e valida a entrada, chama o service, responde."""
+"""Fluxo das requisições de produtos."""
 from flask import jsonify, request
 
-from src.services.produto_service import CATEGORIA_PADRAO
 from src.utils.errors import AppError
-from src.utils.validators import inteiro, numero, objeto_json, paginacao, query_float, texto
+from src.utils.validators import (
+    corpo_json,
+    exigir_inteiro,
+    exigir_numero,
+    exigir_texto,
+    paginacao,
+    query_float,
+)
+
+_OBRIGATORIOS = (
+    ("nome", "Nome é obrigatório"),
+    ("preco", "Preço é obrigatório"),
+    ("estoque", "Estoque é obrigatório"),
+)
 
 
-def _ler_produto(dados):
-    """Presença e tipo dos campos, iguais para criar e atualizar."""
-    dados = objeto_json(dados)
-    if "nome" not in dados:
-        raise AppError("Nome é obrigatório")
-    if "preco" not in dados:
-        raise AppError("Preço é obrigatório")
-    if "estoque" not in dados:
-        raise AppError("Estoque é obrigatório")
+def _ler_produto():
+    """Campos do produto no corpo da requisição, já com os tipos conferidos."""
+    dados = corpo_json(request)
+    for campo, mensagem in _OBRIGATORIOS:
+        if campo not in dados:
+            raise AppError(mensagem, status=400)
+    categoria = dados.get("categoria")
     return {
-        "nome": texto(dados["nome"], "Nome deve ser um texto"),
-        "descricao": texto(dados.get("descricao", ""), "Descrição deve ser um texto"),
-        "preco": numero(dados["preco"], "Preço deve ser numérico"),
-        "estoque": inteiro(dados["estoque"], "Estoque deve ser um número inteiro"),
-        "categoria": dados.get("categoria", CATEGORIA_PADRAO),
+        "nome": exigir_texto(dados["nome"], "Nome deve ser um texto"),
+        "descricao": exigir_texto(dados.get("descricao", ""), "Descrição deve ser um texto"),
+        "preco": exigir_numero(dados["preco"], "Preço deve ser numérico"),
+        "estoque": exigir_inteiro(dados["estoque"], "Estoque deve ser um número inteiro"),
+        "categoria": None if categoria is None else exigir_texto(categoria, "Categoria deve ser um texto"),
     }
 
 
 class ProdutoController:
-    def __init__(self, service):
-        self.service = service
+    def __init__(self, produto_service):
+        self.produtos = produto_service
 
     def listar(self):
         limite, offset = paginacao(request.args)
-        produtos = self.service.listar(limite, offset)
-        return jsonify({"dados": produtos, "sucesso": True}), 200
+        return jsonify({"dados": self.produtos.listar(limite, offset), "sucesso": True}), 200
 
     def buscar_por_id(self, produto_id):
-        return jsonify({"dados": self.service.obter(produto_id), "sucesso": True}), 200
+        return jsonify({"dados": self.produtos.obter(produto_id), "sucesso": True}), 200
 
     def buscar(self):
         limite, offset = paginacao(request.args)
-        resultados = self.service.buscar(
-            limite, offset,
+        resultados = self.produtos.buscar(
             termo=request.args.get("q", ""),
             categoria=request.args.get("categoria"),
             preco_min=query_float(request.args, "preco_min"),
             preco_max=query_float(request.args, "preco_max"),
+            limite=limite,
+            offset=offset,
         )
         return jsonify({"dados": resultados, "total": len(resultados), "sucesso": True}), 200
 
     def criar(self):
-        produto_id = self.service.criar(_ler_produto(request.get_json(silent=True)))
+        produto_id = self.produtos.criar(**_ler_produto())
         return jsonify({"dados": {"id": produto_id}, "sucesso": True, "mensagem": "Produto criado"}), 201
 
     def atualizar(self, produto_id):
-        self.service.obter(produto_id)  # 404 tem precedência sobre os erros do corpo
-        self.service.atualizar(produto_id, _ler_produto(request.get_json(silent=True)))
+        self.produtos.obter(produto_id)  # 404 antes de validar o corpo, como no contrato original
+        self.produtos.atualizar(produto_id, **_ler_produto())
         return jsonify({"sucesso": True, "mensagem": "Produto atualizado"}), 200
 
     def deletar(self, produto_id):
-        self.service.deletar(produto_id)
+        self.produtos.deletar(produto_id)
         return jsonify({"sucesso": True, "mensagem": "Produto deletado"}), 200

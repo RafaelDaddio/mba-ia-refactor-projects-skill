@@ -1,38 +1,30 @@
-"""Informações do sistema: índice da API e health check."""
+"""Informações gerais da API: apresentação e health check."""
 
-ENDPOINTS = {
-    "produtos": "/produtos",
-    "usuarios": "/usuarios",
-    "pedidos": "/pedidos",
-    "login": "/login",
-    "relatorios": "/relatorios/vendas",
-    "health": "/health",
-}
+VERSAO = "1.0.0"
 
 
 class SistemaService:
-    def __init__(self, produtos, usuarios, pedidos, versao):
-        self.produtos = produtos
-        self.usuarios = usuarios
-        self.pedidos = pedidos
-        self.versao = versao
+    def __init__(self, sistema):
+        self.sistema = sistema
 
-    def indice(self):
+    def apresentacao(self):
         return {
             "mensagem": "Bem-vindo à API da Loja",
-            "versao": self.versao,
-            "endpoints": ENDPOINTS,
+            "versao": VERSAO,
+            "endpoints": {
+                "produtos": "/produtos",
+                "usuarios": "/usuarios",
+                "pedidos": "/pedidos",
+                "login": "/login",
+                "relatorios": "/relatorios/vendas",
+                "health": "/health",
+            },
         }
 
     def saude(self):
-        """Só dados não sensíveis: nada de segredos, caminhos ou flags internas."""
         return {
             "status": "ok",
             "database": "connected",
-            "counts": {
-                "produtos": self.produtos.contar(),
-                "usuarios": self.usuarios.contar(),
-                "pedidos": self.pedidos.contar(),
-            },
-            "versao": self.versao,
+            "counts": self.sistema.contagens(),
+            "versao": VERSAO,
         }

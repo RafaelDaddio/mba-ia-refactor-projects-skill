@@ -1,33 +1,37 @@
 """Operações administrativas: reset do banco e execução de SQL."""
 import logging
 
-from src.models.admin_model import ErroSql
+from src.models.admin_model import ConsultaInvalida
 from src.utils.errors import AppError
 
 logger = logging.getLogger(__name__)
 
 
 class AdminService:
-    def __init__(self, admin, sql_habilitado=False):
+    def __init__(self, admin, permitir_sql):
         self.admin = admin
-        self.sql_habilitado = sql_habilitado
+        self.permitir_sql = permitir_sql
 
     def resetar_banco(self):
-        self.admin.apagar_tudo()
+        with self.admin.transacao():
+            self.admin.limpar_dados()
         logger.warning("Banco de dados resetado")
 
-    def executar_query(self, sql):
-        """Devolve as linhas de um SELECT, ou None para os demais comandos."""
-        if not self.sql_habilitado:
+    def exigir_sql_habilitado(self):
+        """A execução de SQL recebido fica desligada até ser habilitada na configuração."""
+        if not self.permitir_sql:
             raise AppError("Endpoint desabilitado", status=403)
-        if not isinstance(sql, str) or not sql:
-            raise AppError("Query não informada")
 
-        logger.warning("Executando SQL administrativo")
+    def executar_sql(self, sql):
+        """Devolve as linhas de um SELECT, ou None para os demais comandos."""
+        self.exigir_sql_habilitado()
+        eh_consulta = sql.strip().upper().startswith("SELECT")
         try:
-            if sql.strip().upper().startswith("SELECT"):
+            if eh_consulta:
                 return self.admin.consultar(sql)
-            self.admin.executar(sql)
-        except ErroSql as erro:
-            raise AppError("Erro ao executar a query: " + str(erro)) from erro
+            with self.admin.transacao():
+                self.admin.executar(sql)
+        except ConsultaInvalida as erro:
+            raise AppError("Erro ao executar a query: " + str(erro), status=400) from erro
+        logger.warning("Comando SQL administrativo executado")
         return None

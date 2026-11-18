@@ -1,21 +1,12 @@
-"""Regras de negócio de usuários: cadastro, autenticação e dados públicos da conta."""
+"""Regras de negócio de usuários e autenticação."""
 import logging
 
 from src.utils.errors import AppError
-from src.utils.senhas import conferir, gerar_hash
+from src.utils.senhas import conferir_senha, gerar_hash
 
 logger = logging.getLogger(__name__)
 
 TIPO_ADMIN = "admin"
-TIPO_CLIENTE = "cliente"
-
-_CAMPOS_PUBLICOS = ("id", "nome", "email", "tipo", "criado_em")
-_CAMPOS_LOGIN = ("id", "nome", "email", "tipo")
-
-
-def _publico(usuario, campos=_CAMPOS_PUBLICOS):
-    """Serialização única da conta: a senha (hash) nunca sai daqui."""
-    return {campo: usuario[campo] for campo in campos}
 
 
 class UsuarioService:
@@ -23,30 +14,41 @@ class UsuarioService:
         self.usuarios = usuarios
 
     def listar(self, limite, offset):
-        return [_publico(usuario) for usuario in self.usuarios.listar(limite, offset)]
+        return self.usuarios.listar(limite, offset)
 
     def obter(self, usuario_id):
         usuario = self.usuarios.buscar_por_id(usuario_id)
         if usuario is None:
             raise AppError("Usuário não encontrado", status=404)
-        return _publico(usuario)
+        return usuario
 
     def criar(self, nome, email, senha):
-        # O e-mail é a chave de busca do login: não pode se repetir.
-        if self.usuarios.buscar_por_email(email) is not None:
-            raise AppError("E-mail já cadastrado", status=409)
-        usuario_id = self.usuarios.inserir(nome, email, gerar_hash(senha), TIPO_CLIENTE)
-        logger.info("Usuário criado: %s", usuario_id)
+        # O e-mail é a chave do login: não pode haver duas contas com o mesmo.
+        if self.usuarios.email_existe(email):
+            raise AppError("Email já cadastrado", status=409)
+        with self.usuarios.transacao():
+            usuario_id = self.usuarios.criar(nome, email, gerar_hash(senha))
+            if usuario_id is None:  # cadastro concorrente barrado pelo índice único
+                raise AppError("Email já cadastrado", status=409)
+        logger.info("Usuário criado: id %s", usuario_id)
         return usuario_id
 
     def autenticar(self, email, senha):
-        usuario = self.usuarios.buscar_por_email(email)
-        if usuario is None or not conferir(usuario["senha"], senha):
-            logger.info("Login falhou")
-            raise AppError("Email ou senha inválidos", status=401)
-        logger.info("Login bem-sucedido: usuário %s", usuario["id"])
-        return _publico(usuario, _CAMPOS_LOGIN)
+        for candidato in self.usuarios.listar_credenciais_por_email(email):
+            if conferir_senha(candidato["senha"], senha):
+                logger.info("Login bem-sucedido: usuário %s", candidato["id"])
+                return {
+                    "id": candidato["id"],
+                    "nome": candidato["nome"],
+                    "email": candidato["email"],
+                    "tipo": candidato["tipo"],
+                }
+        logger.info("Login falhou")
+        raise AppError("Email ou senha inválidos", status=401)
 
-    @staticmethod
-    def eh_admin(usuario):
-        return usuario["tipo"] == TIPO_ADMIN
+    def carregar_para_auth(self, usuario_id):
+        """Conta atual do token: None se não existe mais; o papel é sempre o atual."""
+        usuario = self.usuarios.buscar_por_id(usuario_id)
+        if usuario is None:
+            return None
+        return {"id": usuario["id"], "is_admin": usuario["tipo"] == TIPO_ADMIN}

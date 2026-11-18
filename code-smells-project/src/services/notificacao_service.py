@@ -1,4 +1,4 @@
-"""Notificações de pedidos (simuladas com logging, sem dados pessoais)."""
+"""Notificações de pedidos (simuladas com logging, como no projeto original)."""
 import logging
 
 logger = logging.getLogger(__name__)

@@ -1,13 +1,13 @@
-"""Fluxo das requisições de sistema: índice e health check."""
+"""Fluxo das requisições gerais: raiz e health check."""
 from flask import jsonify
 
 
 class SistemaController:
-    def __init__(self, service):
-        self.service = service
+    def __init__(self, sistema_service):
+        self.sistema = sistema_service
 
     def index(self):
-        return jsonify(self.service.indice())
+        return jsonify(self.sistema.apresentacao())
 
     def health_check(self):
-        return jsonify(self.service.saude()), 200
+        return jsonify(self.sistema.saude()), 200

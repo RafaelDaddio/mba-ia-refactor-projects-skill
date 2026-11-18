@@ -1,4 +1,4 @@
-"""Ponto de entrada: `python app.py`. A aplicação é montada em src/app.py."""
+"""Entry point: `python app.py`. A aplicação é montada em `src/app.py`."""
 import logging
 
 from src.app import create_app

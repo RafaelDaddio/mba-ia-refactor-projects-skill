@@ -1,77 +1,119 @@
-"""Autenticação e níveis de acesso: pública, conta autenticada, dono da conta e administrador."""
+"""Autenticação e níveis de acesso.
+
+Provas aceitas:
+- token de usuário (`Authorization: Bearer <token>`), emitido pelo login. O token só
+  identifica a conta: a cada requisição ela é recarregada, precisa existir e vale o
+  papel atual dela;
+- token administrativo (`X-Admin-Token`), definido na configuração.
+
+Níveis: pública (sem verificação), conta autenticada, dono da conta ou administrador,
+e administrador. Sem prova, 401; prova insuficiente, 403.
+"""
 import hmac
 from functools import wraps
 
-from flask import request
+from flask import current_app, g, request
 from itsdangerous import BadData, URLSafeTimedSerializer
 
 from src.utils.errors import AppError
 
-VALIDADE_TOKEN = 8 * 3600  # segundos
-_PREFIXO = "Bearer "
+TOKEN_VALIDADE_SEGUNDOS = 8 * 3600
+_PREFIXO_BEARER = "Bearer "
 
 
-class Auth:
-    def __init__(self, secret_key, admin_token=None):
-        self._serializer = URLSafeTimedSerializer(secret_key, salt="auth-token")
-        self._admin_token = (admin_token or "").encode()
+def init_auth(app, carregar_conta):
+    """Chamada na composition root.
 
-    def issue_token(self, usuario_id, is_admin=False):
-        """Token assinado com o id e o papel da conta; o papel vale até o token expirar."""
-        return self._serializer.dumps({"uid": usuario_id, "adm": bool(is_admin)})
+    `carregar_conta(usuario_id)` devolve {"id", "is_admin"} da conta atual, ou None
+    se ela não existe mais.
+    """
+    app.extensions["auth_carregar_conta"] = carregar_conta
 
-    def _claims(self):
-        """Conteúdo do token Bearer; None se ausente, adulterado ou expirado."""
+
+def _serializer():
+    return URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="auth-token")
+
+
+def emitir_token(usuario_id):
+    return _serializer().dumps({"uid": usuario_id})
+
+
+def _conta_atual():
+    """Conta do token Bearer, recarregada uma vez por requisição; None se não houver conta válida."""
+    if "auth_conta" not in g:
+        g.auth_conta = None
         header = request.headers.get("Authorization", "")
-        if not header.startswith(_PREFIXO):
-            return None
-        try:
-            claims = self._serializer.loads(header[len(_PREFIXO):], max_age=VALIDADE_TOKEN)
-        except BadData:
-            return None
-        return claims if isinstance(claims, dict) and "uid" in claims else None
+        if header.startswith(_PREFIXO_BEARER):
+            try:
+                claims = _serializer().loads(
+                    header[len(_PREFIXO_BEARER):], max_age=TOKEN_VALIDADE_SEGUNDOS
+                )
+            except BadData:
+                claims = None
+            if isinstance(claims, dict) and isinstance(claims.get("uid"), int):
+                g.auth_conta = current_app.extensions["auth_carregar_conta"](claims["uid"])
+    return g.auth_conta
 
-    def _admin_token_ok(self):
-        informado = request.headers.get("X-Admin-Token", "").encode()
-        return bool(self._admin_token) and hmac.compare_digest(informado, self._admin_token)
 
-    def is_admin(self):
-        claims = self._claims()
-        return self._admin_token_ok() or bool(claims and claims.get("adm"))
+def _token_admin_ok():
+    esperado = (current_app.config.get("ADMIN_TOKEN") or "").encode()
+    recebido = request.headers.get("X-Admin-Token", "").encode()
+    return bool(esperado) and hmac.compare_digest(recebido, esperado)
 
-    def require_user(self):
-        """Nível "conta autenticada". Devolve o id da conta (None para o token administrativo)."""
-        if self._admin_token_ok():
-            return None
-        claims = self._claims()
-        if claims is None:
-            raise AppError("Autenticação necessária", status=401)
-        return claims["uid"]
 
-    def require_account_owner(self, usuario_id):
-        """Nível "dono da conta ou administrador"."""
-        if self.is_admin():
-            return
-        if self.require_user() != usuario_id:
-            raise AppError("Acesso negado a esta conta", status=403)
+def eh_admin():
+    conta = _conta_atual()
+    return _token_admin_ok() or bool(conta and conta["is_admin"])
 
-    def require_admin(self):
-        """Nível "administrador"."""
-        if self.is_admin():
-            return
-        self.require_user()  # 401 sem credencial
-        raise AppError("Acesso restrito a administradores", status=403)
 
-    def user_only(self, view):
+def exigir_usuario():
+    """Nível "conta autenticada". Devolve o id da conta (None para o token administrativo)."""
+    if _token_admin_ok():
+        return None
+    conta = _conta_atual()
+    if conta is None:
+        raise AppError("Autenticação necessária", status=401)
+    return conta["id"]
+
+
+def exigir_dono(usuario_id):
+    """Nível "dono da conta ou administrador"."""
+    if eh_admin():
+        return
+    if exigir_usuario() != usuario_id:
+        raise AppError("Acesso negado a esta conta", status=403)
+
+
+def exigir_admin():
+    """Nível "administrador"."""
+    if eh_admin():
+        return
+    exigir_usuario()  # 401 sem credencial
+    raise AppError("Acesso restrito a administradores", status=403)
+
+
+def somente_autenticado(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        exigir_usuario()
+        return view(*args, **kwargs)
+    return wrapper
+
+
+def somente_dono(parametro):
+    """Para rotas em que a conta vem do caminho (ex.: `/usuarios/<int:usuario_id>`)."""
+    def decorator(view):
         @wraps(view)
         def wrapper(*args, **kwargs):
-            self.require_user()
+            exigir_dono(kwargs[parametro])
             return view(*args, **kwargs)
         return wrapper
+    return decorator
 
-    def admin_only(self, view):
-        @wraps(view)
-        def wrapper(*args, **kwargs):
-            self.require_admin()
-            return view(*args, **kwargs)
-        return wrapper
+
+def somente_admin(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        exigir_admin()
+        return view(*args, **kwargs)
+    return wrapper

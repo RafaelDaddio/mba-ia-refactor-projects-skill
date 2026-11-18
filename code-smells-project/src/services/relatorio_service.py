@@ -1,12 +1,12 @@
 """Relatório de vendas."""
 from src.services.pedido_service import STATUS_APROVADO, STATUS_CANCELADO, STATUS_PENDENTE
 
-# (faturamento mínimo, desconto), da maior faixa para a menor
-FAIXAS_DESCONTO = ((10_000, 0.10), (5_000, 0.05), (1_000, 0.02))
+# (faturamento mínimo, percentual de desconto), da maior faixa para a menor
+FAIXAS_DE_DESCONTO = ((10000, 0.1), (5000, 0.05), (1000, 0.02))
 
 
 def desconto_para(faturamento):
-    for minimo, percentual in FAIXAS_DESCONTO:
+    for minimo, percentual in FAIXAS_DE_DESCONTO:
         if faturamento > minimo:
             return faturamento * percentual
     return 0
@@ -17,16 +17,16 @@ class RelatorioService:
         self.pedidos = pedidos
 
     def vendas(self):
-        resumo = self.pedidos.resumo_por_status()
+        por_status = self.pedidos.totais_por_status()
 
         def quantidade(status):
-            return resumo.get(status, {}).get("quantidade", 0)
+            return por_status.get(status, {}).get("quantidade", 0)
 
-        total_pedidos = sum(grupo["quantidade"] for grupo in resumo.values())
+        total_pedidos = sum(grupo["quantidade"] for grupo in por_status.values())
         cancelados = quantidade(STATUS_CANCELADO)
         # Pedidos cancelados não entram no faturamento nem no ticket médio.
         faturamento = sum(
-            grupo["total"] for status, grupo in resumo.items() if status != STATUS_CANCELADO
+            grupo["total"] for status, grupo in por_status.items() if status != STATUS_CANCELADO
         )
         pedidos_faturados = total_pedidos - cancelados
         desconto = desconto_para(faturamento)

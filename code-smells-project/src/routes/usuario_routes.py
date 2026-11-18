@@ -1,12 +1,20 @@
-"""Rotas de usuários e login. Cadastro e login são públicos; a listagem é do administrador."""
+"""Rotas de usuários e login. Cadastro e login são públicos."""
 from flask import Blueprint
 
+from src.middlewares.auth import somente_admin, somente_dono
 
-def criar_blueprint(controller, auth):
+
+def criar_blueprint(controller):
     bp = Blueprint("usuarios", __name__)
-    bp.add_url_rule("/usuarios", view_func=auth.admin_only(controller.listar), methods=["GET"])
-    # dono da conta ou administrador: conferido no controller, com o id do caminho
-    bp.add_url_rule("/usuarios/<int:usuario_id>", view_func=controller.buscar_por_id, methods=["GET"])
-    bp.add_url_rule("/usuarios", view_func=controller.criar, methods=["POST"])
-    bp.add_url_rule("/login", view_func=controller.login, methods=["POST"])
+    # lista todas as contas: administrador
+    bp.add_url_rule("/usuarios", "listar_usuarios", somente_admin(controller.listar), methods=["GET"])
+    # dados de uma conta: dono ou administrador
+    bp.add_url_rule(
+        "/usuarios/<int:usuario_id>",
+        "buscar_usuario",
+        somente_dono("usuario_id")(controller.buscar_por_id),
+        methods=["GET"],
+    )
+    bp.add_url_rule("/usuarios", "criar_usuario", controller.criar, methods=["POST"])
+    bp.add_url_rule("/login", "login", controller.login, methods=["POST"])
     return bp

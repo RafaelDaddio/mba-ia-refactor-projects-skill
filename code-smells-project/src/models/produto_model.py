@@ -1,80 +1,75 @@
 """Acesso a dados de produtos."""
+from src.models.base_model import BaseModel
 
-_CAMPOS = ("id", "nome", "descricao", "preco", "estoque", "categoria", "ativo", "criado_em")
-
-
-def _para_dict(row):
-    return {campo: row[campo] for campo in _CAMPOS}
+_COLUNAS = ("id", "nome", "descricao", "preco", "estoque", "categoria", "ativo", "criado_em")
+_SELECT = f"SELECT {', '.join(_COLUNAS)} FROM produtos"
 
 
-class ProdutoModel:
-    def __init__(self, db):
-        self.db = db
+def _para_dict(linha):
+    return {coluna: linha[coluna] for coluna in _COLUNAS}
 
+
+class ProdutoModel(BaseModel):
     def listar(self, limite, offset):
-        rows = self.db.conn.execute(
-            "SELECT * FROM produtos ORDER BY id LIMIT ? OFFSET ?", (limite, offset)
+        linhas = self._conn.execute(
+            f"{_SELECT} ORDER BY id LIMIT ? OFFSET ?", (limite, offset)
         ).fetchall()
-        return [_para_dict(row) for row in rows]
+        return [_para_dict(linha) for linha in linhas]
 
     def buscar_por_id(self, produto_id):
-        row = self.db.conn.execute("SELECT * FROM produtos WHERE id = ?", (produto_id,)).fetchone()
-        return _para_dict(row) if row else None
+        linha = self._conn.execute(f"{_SELECT} WHERE id = ?", (produto_id,)).fetchone()
+        return _para_dict(linha) if linha else None
 
-    def buscar(self, limite, offset, termo=None, categoria=None, preco_min=None, preco_max=None):
-        # Só cláusulas fixas entram no texto; os valores vão nos parâmetros.
-        clausulas, params = [], []
+    def buscar(self, termo, categoria, preco_min, preco_max, limite, offset):
+        # Só cláusulas fixas entram no texto do SQL; os valores vão nos parâmetros.
+        clausulas, parametros = [], []
         if termo:
             clausulas.append("(nome LIKE ? OR descricao LIKE ?)")
-            params += [f"%{termo}%", f"%{termo}%"]
+            parametros += [f"%{termo}%", f"%{termo}%"]
         if categoria:
             clausulas.append("categoria = ?")
-            params.append(categoria)
-        if preco_min is not None:
+            parametros.append(categoria)
+        if preco_min:
             clausulas.append("preco >= ?")
-            params.append(preco_min)
-        if preco_max is not None:
+            parametros.append(preco_min)
+        if preco_max:
             clausulas.append("preco <= ?")
-            params.append(preco_max)
-        where = f"WHERE {' AND '.join(clausulas)}" if clausulas else ""
-        rows = self.db.conn.execute(
-            f"SELECT * FROM produtos {where} ORDER BY id LIMIT ? OFFSET ?", (*params, limite, offset)
+            parametros.append(preco_max)
+        where = f" WHERE {' AND '.join(clausulas)}" if clausulas else ""
+        linhas = self._conn.execute(
+            f"{_SELECT}{where} ORDER BY id LIMIT ? OFFSET ?", (*parametros, limite, offset)
         ).fetchall()
-        return [_para_dict(row) for row in rows]
+        return [_para_dict(linha) for linha in linhas]
 
-    def inserir(self, nome, descricao, preco, estoque, categoria):
-        with self.db.transaction() as conn:
-            cursor = conn.execute(
-                "INSERT INTO produtos (nome, descricao, preco, estoque, categoria) VALUES (?, ?, ?, ?, ?)",
-                (nome, descricao, preco, estoque, categoria),
-            )
-            return cursor.lastrowid
+    def criar(self, nome, descricao, preco, estoque, categoria):
+        cursor = self._conn.execute(
+            "INSERT INTO produtos (nome, descricao, preco, estoque, categoria) VALUES (?, ?, ?, ?, ?)",
+            (nome, descricao, preco, estoque, categoria),
+        )
+        return cursor.lastrowid
 
     def atualizar(self, produto_id, nome, descricao, preco, estoque, categoria):
-        with self.db.transaction() as conn:
-            conn.execute(
-                "UPDATE produtos SET nome = ?, descricao = ?, preco = ?, estoque = ?, categoria = ? WHERE id = ?",
-                (nome, descricao, preco, estoque, categoria, produto_id),
-            )
+        """Devolve False se o produto não existe."""
+        cursor = self._conn.execute(
+            "UPDATE produtos SET nome = ?, descricao = ?, preco = ?, estoque = ?, categoria = ? WHERE id = ?",
+            (nome, descricao, preco, estoque, categoria, produto_id),
+        )
+        return cursor.rowcount == 1
 
     def deletar(self, produto_id):
-        with self.db.transaction() as conn:
-            conn.execute("DELETE FROM produtos WHERE id = ?", (produto_id,))
+        """Devolve False se o produto não existe."""
+        cursor = self._conn.execute("DELETE FROM produtos WHERE id = ?", (produto_id,))
+        return cursor.rowcount == 1
 
     def baixar_estoque(self, produto_id, quantidade):
-        """Baixa condicional: devolve False se o estoque não cobre a quantidade."""
-        with self.db.transaction() as conn:
-            cursor = conn.execute(
-                "UPDATE produtos SET estoque = estoque - ? WHERE id = ? AND estoque >= ?",
-                (quantidade, produto_id, quantidade),
-            )
-            return cursor.rowcount > 0
+        """Baixa condicional: só altera se houver estoque. Devolve False se não baixou."""
+        cursor = self._conn.execute(
+            "UPDATE produtos SET estoque = estoque - ? WHERE id = ? AND estoque >= ?",
+            (quantidade, produto_id, quantidade),
+        )
+        return cursor.rowcount == 1
 
     def devolver_estoque(self, produto_id, quantidade):
-        with self.db.transaction() as conn:
-            conn.execute(
-                "UPDATE produtos SET estoque = estoque + ? WHERE id = ?", (quantidade, produto_id)
-            )
-
-    def contar(self):
-        return self.db.conn.execute("SELECT COUNT(*) FROM produtos").fetchone()[0]
+        self._conn.execute(
+            "UPDATE produtos SET estoque = estoque + ? WHERE id = ?", (quantidade, produto_id)
+        )

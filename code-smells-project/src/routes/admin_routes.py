@@ -1,9 +1,11 @@
-"""Rotas administrativas: sempre exigem credencial de administrador."""
+"""Rotas administrativas (administrador)."""
 from flask import Blueprint
 
+from src.middlewares.auth import somente_admin
 
-def criar_blueprint(controller, auth):
+
+def criar_blueprint(controller):
     bp = Blueprint("admin", __name__)
-    bp.add_url_rule("/admin/reset-db", view_func=auth.admin_only(controller.reset_database), methods=["POST"])
-    bp.add_url_rule("/admin/query", view_func=auth.admin_only(controller.executar_query), methods=["POST"])
+    bp.add_url_rule("/admin/reset-db", "reset_database", somente_admin(controller.reset_database), methods=["POST"])
+    bp.add_url_rule("/admin/query", "executar_query", somente_admin(controller.executar_query), methods=["POST"])
     return bp

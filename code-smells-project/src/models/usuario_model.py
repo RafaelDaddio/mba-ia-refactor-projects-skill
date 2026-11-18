@@ -1,39 +1,50 @@
-"""Acesso a dados de usuários. O campo `senha` guarda o hash e não sai da camada de serviço."""
+"""Acesso a dados de usuários."""
+import sqlite3
 
-_CAMPOS = ("id", "nome", "email", "senha", "tipo", "criado_em")
+from src.models.base_model import BaseModel
+
+# A senha (hash) nunca entra na representação pública do usuário.
+_COLUNAS_PUBLICAS = ("id", "nome", "email", "tipo", "criado_em")
+_SELECT = f"SELECT {', '.join(_COLUNAS_PUBLICAS)} FROM usuarios"
 
 
-def _para_dict(row):
-    return {campo: row[campo] for campo in _CAMPOS}
+def _para_dict(linha):
+    return {coluna: linha[coluna] for coluna in _COLUNAS_PUBLICAS}
 
 
-class UsuarioModel:
-    def __init__(self, db):
-        self.db = db
-
+class UsuarioModel(BaseModel):
     def listar(self, limite, offset):
-        rows = self.db.conn.execute(
-            "SELECT * FROM usuarios ORDER BY id LIMIT ? OFFSET ?", (limite, offset)
+        linhas = self._conn.execute(
+            f"{_SELECT} ORDER BY id LIMIT ? OFFSET ?", (limite, offset)
         ).fetchall()
-        return [_para_dict(row) for row in rows]
+        return [_para_dict(linha) for linha in linhas]
 
     def buscar_por_id(self, usuario_id):
-        row = self.db.conn.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
-        return _para_dict(row) if row else None
+        linha = self._conn.execute(f"{_SELECT} WHERE id = ?", (usuario_id,)).fetchone()
+        return _para_dict(linha) if linha else None
 
-    def buscar_por_email(self, email):
-        row = self.db.conn.execute(
-            "SELECT * FROM usuarios WHERE email = ? ORDER BY id LIMIT 1", (email,)
-        ).fetchone()
-        return _para_dict(row) if row else None
+    def email_existe(self, email):
+        linha = self._conn.execute("SELECT 1 FROM usuarios WHERE email = ?", (email,)).fetchone()
+        return linha is not None
 
-    def inserir(self, nome, email, senha_hash, tipo):
-        with self.db.transaction() as conn:
-            cursor = conn.execute(
-                "INSERT INTO usuarios (nome, email, senha, tipo) VALUES (?, ?, ?, ?)",
-                (nome, email, senha_hash, tipo),
+    def listar_credenciais_por_email(self, email):
+        """Uso interno da autenticação: inclui o hash da senha.
+
+        Devolve uma lista porque bancos antigos podem ter e-mails duplicados.
+        """
+        linhas = self._conn.execute(
+            "SELECT id, nome, email, tipo, senha FROM usuarios WHERE email = ? ORDER BY id",
+            (email,),
+        ).fetchall()
+        return [dict(linha) for linha in linhas]
+
+    def criar(self, nome, email, senha_hash):
+        """Insere o usuário e devolve o id, ou None se o e-mail já existe."""
+        try:
+            cursor = self._conn.execute(
+                "INSERT INTO usuarios (nome, email, senha) VALUES (?, ?, ?)",
+                (nome, email, senha_hash),
             )
-            return cursor.lastrowid
-
-    def contar(self):
-        return self.db.conn.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
+        except sqlite3.IntegrityError:
+            return None
+        return cursor.lastrowid
